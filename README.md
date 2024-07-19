@@ -38,3 +38,6 @@ DATA_DIR=./data  # path to load data
 MODEL=./bipe_rope # model checkpoint path
 bash script/eval.sh
 ```
+
+## Credits
+The codebase are inherited from [BiPE](https://github.com/zhenyuhe00/BiPE). Thanks to their excellent work!
