@@ -11,9 +11,9 @@ parser.add_argument(
 
 args = parser.parse_args()
 
-raw_datasets = load_dataset('monology/pile-uncopyrighted')
+raw_datasets = load_dataset('/zhujiajun/data/pile-uncopyrighted')
 
-raw_datasets.save_to_disk(args.dataset_cache_dir, num_proc=64)
+# raw_datasets.save_to_disk(args.dataset_cache_dir, num_proc=64)
 
 
 # filtered data for evaluation
@@ -24,7 +24,7 @@ pg19.save_to_disk(args.dataset_cache_dir+"_pg19", num_proc=64)
 
 # github
 github = raw_datasets.filter(lambda item: item['meta']['pile_set_name'] == 'Github', num_proc=64)
-github.save_to_disk(args.dataset_cache_dir+"_pg19", num_proc=64)
+github.save_to_disk(args.dataset_cache_dir+"_github", num_proc=64)
 
 
 # aixiv
