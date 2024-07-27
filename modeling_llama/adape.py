@@ -592,6 +592,7 @@ class AdaLlamaModel(LlamaPreTrainedModel):
 
         return combined_attention_mask
     
+    @staticmethod
     def rff_map(X, D):
         device = X.device
         N, d = X.shape
