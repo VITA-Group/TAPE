@@ -1,0 +1,73 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "deepspeed",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "/opt/conda/envs/bipe/bin/deepspeed",
+            "console": "integratedTerminal",
+            "args": [
+                "${workspaceFolder}/train.py",
+                "--dataset_cache_dir", "./data/wikitext",
+                "--output_dir", "./output/debug",
+                "--config_name", "config/adape.json",
+                "--max_steps",
+                "100000",
+                "--warmup_steps",
+                "1000",
+                "--lr_scheduler_type",
+                "polynomial",
+                "--save_steps",
+                "1000",
+                "--eval_steps",
+                "1000",
+                "--logging_steps",
+                "50",
+                "--weight_decay",
+                "0.01",
+                "--learning_rate",
+                "1e-4",
+                "--model_max_position_embeddings",
+                "1024",
+                "--per_device_train_batch_size", "16",
+                "--per_device_eval_batch_size", "16",
+                "--gradient_accumulation_steps",
+                "1",
+                "--do_train",
+                "True",
+                "--do_eval",
+                "True",
+                "--do_predict",
+                "True",
+                "--evaluation_strategy",
+                "steps",
+                "--save_strategy",
+                "steps",
+                "--load_best_model_at_end",
+                "True",
+                "--report_to",
+                "tensorboard",
+                "--gradient_checkpointing",
+                "False",
+                "--fp16",
+                "True"
+            ],
+            "env": {
+                "DATA_DIR": "./data/pile_pg19",
+                "OUTPUT_DIR": "./output",
+                "CONFIG_NAME": "config/rope.json"
+            },
+        }
+    ]
+}

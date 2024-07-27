@@ -105,7 +105,7 @@ def train():
         model = LlamaForCausalLM(config)
         n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
         if training_args.local_rank == 0:
-            print(f"Training new model from scratch - Total size={n_params/2**20:.2f}M params")
+            print(f"Training new model from scratch - Total size={n_params/2**20:.2f}M parameters")
 
     tokenizer = AutoTokenizer.from_pretrained(
         "llama_tokenizer",

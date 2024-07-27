@@ -1,12 +1,12 @@
-OUTPUT_DIR=/mnt/bn/hzy-data-all/output_pile/tmp  # path to save checkpoints and tensorboard
-DATA_DIR=/mnt/bn/hzy-data-all/wikitext-130-raw-v1  # path to load data
-CONFIG_NAME=config/rope.json # choose from [config/bipe_rope.json, config/bipe_alibi.json, config/rope.json, config/alibi.json]
+OUTPUT_DIR=/zhujiajun/BiPE/output/debug  # path to save checkpoints and tensorboard
+DATA_DIR=/zhujiajun/BiPE/data/wikitext  # path to load data
+CONFIG_NAME=config/adape.json # choose from [config/bipe_rope.json, config/bipe_alibi.json, config/rope.json, config/alibi.json]
 
 
 deepspeed --master_port 25401 train.py \
     --dataset_cache_dir $DATA_DIR \
     --output_dir $OUTPUT_DIR \
-    --config_name config/bipe_rope.json \
+    --config_name $CONFIG_NAME \
     --max_steps 1000000 \
     --warmup_steps 10000 \
     --lr_scheduler_type polynomial \

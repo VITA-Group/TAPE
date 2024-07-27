@@ -118,8 +118,8 @@ class AdaPELayer(nn.Module):
         self.intermediate_size = config.intermediate_size
         self.x_trm = LlamaMLP(config) 
         self.pos_trm = LlamaMLP(config, down_size=config.position_size)
-        self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
-        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
+        self.up_proj = nn.Linear(config.position_size, self.intermediate_size, bias=False)
+        self.down_proj = nn.Linear(self.intermediate_size, config.position_size, bias=False)
 
     def forward(self, x, e):
         # x: (batch_size, seq_len, hidden_size)
@@ -144,7 +144,7 @@ class AdaPELayer(nn.Module):
             ]
             down_proj = sum(down_proj)
         else:
-            down_e = self.down_proj(self.pos_proj(x_prime)) * self.up_proj(x_prime) * e
+            down_e = self.down_proj(self.up_proj(x_prime)) * e
 
         return down_x, down_e
 
@@ -204,11 +204,11 @@ class AdaPEAttention(nn.Module):
         super().__init__()
         self.config = config
         self.hidden_size = config.hidden_size
-        self.position_size = config.hidden_size
+        self.position_size = config.position_size
 
         self.num_heads = config.num_attention_heads
         self.head_dim = self.hidden_size // self.num_heads
-        self.position_dim = self.head_dim
+        self.position_dim = self.position_size // self.num_heads
 
         self.num_key_value_heads = config.num_key_value_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
@@ -368,7 +368,7 @@ class AdaLlamaDecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        postition_states: torch.Tensor,
+        position_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
@@ -394,9 +394,9 @@ class AdaLlamaDecoderLayer(nn.Module):
         hidden_states = self.input_layernorm(hidden_states)
 
         # Self Attention
-        hidden_states, postition_states, self_attn_weights, present_key_value = self.self_attn(
+        hidden_states, position_states, self_attn_weights, present_key_value = self.self_attn(
             hidden_states=hidden_states,
-            postition_states=postition_states,
+            position_states=position_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
             past_key_value=past_key_value,
@@ -408,10 +408,10 @@ class AdaLlamaDecoderLayer(nn.Module):
         # Fully Connected
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states, postition_states = self.mlp(hidden_states, postition_states)
+        hidden_states, position_states = self.mlp(hidden_states, position_states)
         hidden_states = residual + hidden_states
 
-        outputs = (hidden_states, postition_states)
+        outputs = (hidden_states, position_states)
 
         if output_attentions:
             outputs += (self_attn_weights,)
@@ -593,19 +593,40 @@ class AdaLlamaModel(LlamaPreTrainedModel):
         return combined_attention_mask
     
     @staticmethod
-    def rff_map(X, D):
+    def rff_map(X, dim):
+        """
+        :param X: Input data tensor, shape: (batch_size, N, d)
+        :param D: Dimensionality of the randomized feature map
+        :return: Randomized Fourier feature map tensor Z, shape: (batch_size, N, 2D). Each slice along the batch dimension 
+        corresponds to a randomized Fourier feature map for a batch of data points in X.
+        """
         device = X.device
-        N, d = X.shape
-        W = torch.normal(mean=0.0, std=1.0, size=(D, d), device=device)
+        batch_size, N, d = X.shape
+        Z_list = []
+        
+        for i in range(batch_size):
+            W = torch.normal(mean=0.0, std=1.0, size=(dim, d), device=device)
+            temp = X[i] @ W.T
+            cos_features = torch.cos(temp)
+            sin_features = torch.sin(temp)
+            Z = torch.cat((cos_features, sin_features), dim=1)
+            Z_list.append(Z / torch.sqrt(torch.tensor(dim, dtype=torch.float32, device=device)))
+        
+        return torch.stack(Z_list)
+
+    def old_rff_map(X, dim):
+        device = X.device
+        bs, N, d = X.shape
+        W = torch.normal(mean=0.0, std=1.0, size=(dim, d), device=device)
         temp = X @ W.T
         cos_features = torch.cos(temp)
         sin_features = torch.sin(temp)
-        Z = torch.cat((cos_features, sin_features), dim=1)
+        Z = torch.cat((cos_features, sin_features), dim=2)
         
-        return Z / torch.sqrt(torch.tensor(D, dtype=torch.float32, device=device))
+        return Z / torch.sqrt(torch.tensor(dim, dtype=torch.float32, device=device))
 
     def _init_adape(self, feats):
-        pe = self.rff_map(feats, D=self.config.position_size)
+        pe = self.rff_map(feats, dim=self.config.position_size // 2)
         return pe
 
     @add_start_docstrings_to_model_forward(LLAMA_INPUTS_DOCSTRING)
