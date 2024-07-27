@@ -4,7 +4,7 @@ Adaptive Positional Encoding for Better Length Extrapolation (WIP)
 
 ## Setup Environment
 ```shell
-conda create -n bipe python=3.9
+conda create -n bipe python=3.10
 conda activate bipe
 pip3 install -r requirements.txt
 ```

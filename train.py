@@ -92,8 +92,9 @@ def train():
         LlamaForCausalLM = MyLlamaForCausalLM_bipe_rope
     elif config.rpe_type == "bipe_alibi" or config.rpe_type == "alibi":
         LlamaForCausalLM = MyLlamaForCausalLM_bipe_alibi
-    else:
-        raise NotImplementedError
+    elif config.rpe_type == "adape":
+        from modeling_llama.adape import AdaLlamaForCausalLM
+        LlamaForCausalLM = AdaLlamaForCausalLM
 
     if model_args.model_name_or_path:
         model = LlamaForCausalLM.from_pretrained(
@@ -124,15 +125,16 @@ def train():
     if training_args.local_rank > 0: 
         torch.distributed.barrier()
 
+    os.makedirs(f"{data_args.dataset_cache_dir}/tokenized", exist_ok=True)
     tokenized_datasets = raw_datasets.map(
         tokenize_function,
         batched=True,
         num_proc=64,
         remove_columns=column_names,
         load_from_cache_file=True,
-        cache_file_names={"train": f"{data_args.dataset_cache_dir}/tokenized_datasets_train.arrow",\
-            "validation": f"{data_args.dataset_cache_dir}/tokenized_datasets_validation.arrow", \
-            "test": f"{data_args.dataset_cache_dir}/tokenized_datasets_test.arrow"},
+        cache_file_names={"train": f"{data_args.dataset_cache_dir}/tokenized/tokenized_datasets_train.arrow",\
+            "validation": f"{data_args.dataset_cache_dir}/tokenized/tokenized_datasets_validation.arrow", \
+            "test": f"{data_args.dataset_cache_dir}/tokenized/tokenized_datasets_test.arrow"},
         desc="Running tokenizer on dataset",
     )
 
