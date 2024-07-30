@@ -3,11 +3,12 @@
 [ -z "${CONFIG_NAME}" ] && CONFIG_NAME=config/bipe_rope.json # choose from [config/bipe_rope.json, config/bipe_alibi.json, config/rope.json, config/alibi.json]
 
 
-deepspeed --include localhost:0,1,2,3,4,5,6,7 train.py \
+deepspeed --master_port 25401 --include localhost:0,1,2,3,4,5,6,7 train.py \
     --ddp_timeout 18000 \
     --dataset_cache_dir $DATA_DIR \
     --output_dir $OUTPUT_DIR \
     --config_name $CONFIG_NAME \
+    --resume_from_checkpoint True \
     --max_steps 100000 \
     --warmup_steps 1000 \
     --lr_scheduler_type polynomial \

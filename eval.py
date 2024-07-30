@@ -166,6 +166,9 @@ def main():
         LlamaForCausalLM = MyLlamaForCausalLM_bipe_rope
     elif config.rpe_type == "bipe_alibi" or config.rpe_type == "alibi":
         LlamaForCausalLM = MyLlamaForCausalLM_bipe_alibi
+    elif config.rpe_type == 'adape':
+        from modeling_llama.adape import AdaLlamaForCausalLM
+        LlamaForCausalLM = AdaLlamaForCausalLM
     else:
         raise NotImplementedError
     model = LlamaForCausalLM.from_pretrained(
@@ -189,13 +192,14 @@ def main():
     def tokenize_function(examples):
         return tokenizer(examples[text_column_name])
 
+    os.makedirs(f"{args.dataset_cache_dir}/tokenized", exist_ok=True)
     tokenized_datasets = raw_datasets.map(
         tokenize_function,
         batched=True,
         num_proc=args.preprocessing_num_workers,
         remove_columns=column_names,
         load_from_cache_file=not args.overwrite_cache,
-        cache_file_name=f"{args.dataset_cache_dir}/tokenized_datasets_validation.arrow",
+        cache_file_name=f"{args.dataset_cache_dir}/tokenized/tokenized_datasets_validation.arrow",
         desc="Running tokenizer on dataset",
     )
 
@@ -265,8 +269,30 @@ def main():
         perplexity = math.exp(eval_loss)
     except OverflowError:
         perplexity = float("inf")
-    with open("result.txt", "a+") as f:
-        print(f"data: {args.dataset_cache_dir}; model: {args.model_name_or_path} \n block_size: {args.block_size} ppl: {perplexity}", file=f)
+    
+    
+    def extract_name(path, type):
+        if type == "data":
+            return path.split('_')[-1]
+        elif type == "model":
+            return path.split('/')[-1].split('_')[0]
+
+    data_name = extract_name(args.dataset_cache_dir, "data")
+    model_name = extract_name(args.model_name_or_path, "model")
+    csv_file = './assets/results.csv'
+
+    if accelerator.is_main_process:
+        import csv
+        # 检查文件是否存在，如果不存在则写入标题行
+        if not os.path.isfile(csv_file):
+            with open(csv_file, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(['data', 'model', 'block_size', 'perplexity'])
+
+        # 写入数据行
+        with open(csv_file, 'a+', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([data_name, model_name, args.block_size, perplexity])
 
 if __name__ == "__main__":
     main()
