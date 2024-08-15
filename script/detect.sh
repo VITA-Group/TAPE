@@ -1,7 +1,7 @@
 # bash script/detect.sh > detect.log 2>&1 &
-detect="accelerate"
+detect="deepspeed"
 commands=(
-  "MODEL=./output/adape_pile bash script/eval.sh"
+  "OUTPUT_DIR=./output/finetune/rope CONFIG_NAME=config/rope.json bash script/finetune.sh > rope_finetune.log 2>&1 &"
 )
 
 for cmd in "${commands[@]}"; do

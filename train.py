@@ -42,6 +42,7 @@ class ModelArguments:
     model_name_or_path: Optional[str] = field(default=None)
 
 
+
 @dataclass
 class DataArguments:
     dataset_cache_dir: str = field(default=None, metadata={"help": "Path to the data."})
@@ -58,6 +59,7 @@ class TrainingArguments(transformers.TrainingArguments):
     rope_scaling_type: Optional[str] = field(default=None)
     rope_scaling_factor: float = field(default=1.0)
     resume_from_checkpoint: Optional[bool] = field(default=None)
+    finetune_from_pretrained: Optional[str] = field(default=None)
 
 
 def safe_save_model_for_hf_trainer(trainer: transformers.Trainer, output_dir: str):
@@ -92,20 +94,43 @@ def train():
         LlamaForCausalLM = MyLlamaForCausalLM_bipe_rope
     elif config.rpe_type == "bipe_alibi" or config.rpe_type == "alibi":
         LlamaForCausalLM = MyLlamaForCausalLM_bipe_alibi
+    elif config.rpe_type == 'ada_rope':
+        from modeling_llama.ada_rope import MyLlamaForCausalLM
+        LlamaForCausalLM = MyLlamaForCausalLM
     elif config.rpe_type == "adape":
         from modeling_llama.adape import AdaLlamaForCausalLM
         LlamaForCausalLM = AdaLlamaForCausalLM
+    elif config.rpe_type == "new_rope":
+        from modeling_llama.new_rope import MyLlamaForCausalLM
+        LlamaForCausalLM = MyLlamaForCausalLM
+    else:
+        raise NotImplementedError
 
     if model_args.model_name_or_path:
         model = LlamaForCausalLM.from_pretrained(
             model_args.model_name_or_path,
             config=config,
         )
+        if training_args.local_rank == 0:
+            n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
+            print(f"Finetuning model from {model_args.model_name_or_path} - Model Size={n_params/2**20:.2f}M parameters")
     else:
         model = LlamaForCausalLM(config)
         n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
         if training_args.local_rank == 0:
-            print(f"Training new model from scratch - Total size={n_params/2**20:.2f}M parameters")
+            print(f"Training new model from scratch - Total Size={n_params/2**20:.2f}M parameters")
+
+    # determine if load from pretrained
+    # if training_args.finetune_from_pretrained:
+    #     pretrained_model = LlamaForCausalLM.from_pretrained(training_args.finetune_from_pretrained)
+    #     checkpoint = pretrained_model.state_dict()
+    #     def filter(key):
+    #         rotary = 'sin_cached' not in key and 'cos_cached' not in key
+    #         post_linear = "post_attention_linears" not in key
+    #         pe_proj = "pe.proj" not in key
+    #         return all((rotary, post_linear, pe_proj))
+    #     filtered_checkpoint = {k: v for k, v in checkpoint.items() if filter(k)}
+    #     model.load_state_dict(filtered_checkpoint, strict=False)
 
     tokenizer = AutoTokenizer.from_pretrained(
         "llama_tokenizer",

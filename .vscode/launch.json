@@ -15,13 +15,14 @@
             "name": "deepspeed",
             "type": "debugpy",
             "request": "launch",
-            "program": "/opt/conda/envs/bipe/bin/deepspeed",
+            "program": "/opt/conda/envs/adape/bin/deepspeed",
             "console": "integratedTerminal",
             "args": [
                 "${workspaceFolder}/train.py",
                 "--dataset_cache_dir", "./data/wikitext",
                 "--output_dir", "./output/debug",
-                "--config_name", "config/adape.json",
+                "--config_name", "config/new_rope.json",
+                "--model_name_or_path", "./output/rope_pile",
                 "--max_steps",
                 "100000",
                 "--warmup_steps",
@@ -40,10 +41,10 @@
                 "1e-4",
                 "--model_max_position_embeddings",
                 "1024",
-                "--per_device_train_batch_size", "16",
-                "--per_device_eval_batch_size", "16",
+                "--per_device_train_batch_size", "2",
+                "--per_device_eval_batch_size", "2",
                 "--gradient_accumulation_steps",
-                "1",
+                "2",
                 "--do_train",
                 "True",
                 "--do_eval",
@@ -58,16 +59,34 @@
                 "True",
                 "--report_to",
                 "tensorboard",
-                "--gradient_checkpointing",
-                "False",
-                "--fp16",
-                "True"
+                "--gradient_checkpointing", "False",
+                "--fp16", "True"
             ],
             "env": {
-                "DATA_DIR": "./data/pile_pg19",
-                "OUTPUT_DIR": "./output",
-                "CONFIG_NAME": "config/rope.json"
+                // "DATA_DIR": "./data/pile_pg19",
+                // "OUTPUT_DIR": "./output",
+                // "CONFIG_NAME": "config/rope.json"
             },
-        }
+        },
+        {
+            "name": "Evaluate",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/eval.py",
+            "console": "integratedTerminal",
+            "args": [
+              "--dataset_cache_dir", "${workspaceFolder}/data/pile_pg19",
+              "--block_size", "1024",
+              "--tokenizer_name", "llama_tokenizer",
+              "--per_device_eval_batch_size", "8",
+              "--preprocessing_num_workers", "64",
+              "--model_name_or_path", "${workspaceFolder}/output/rope_pile/"
+            ],
+            // "env": {
+            //   "DATA_DIR": "${workspaceFolder}/data/pile",
+            //   "MODEL": "${workspaceFolder}/output/ada_rope_pile/checkpoint-39000",
+            //   "batch_size": "8"
+            // }
+          },
     ]
 }

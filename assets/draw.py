@@ -20,6 +20,7 @@ df = pd.read_csv('results.csv')
 # 获取唯一的data和model值
 data_values = df['data'].unique()
 model_values = df['model'].unique()
+model_values = model_values[model_values != 'adape']
 
 # 设置子图
 fig, axes = plt.subplots(nrows=len(data_values), ncols=1, figsize=(10, 5 * len(data_values)))

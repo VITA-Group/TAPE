@@ -1,8 +1,8 @@
 [ -z "${batch_size}" ] && batch_size=8
 [ -z "${DATA_DIR}" ] && DATA_DIR=./data/pile # data path
-[ -z "${MODEL}" ] && MODEL=./output/rope_pile # checkpoint path
+[ -z "${MODEL}" ] && MODEL=./output/finetune/big_rope_pile/checkpoint-4000/ # checkpoint path
 
-for block_size in 1024 2048 3072 4096 5120 6144
+for block_size in 3072 4096 5120 6144
 do
     for set in pg19 arxiv github
     do

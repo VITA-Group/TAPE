@@ -10,4 +10,4 @@ mixed_precision: 'no'
 num_machines: 1
 num_processes: 8
 use_cpu: false
-main_process_port: 29512
+main_process_port: 29523

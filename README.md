@@ -8,14 +8,12 @@ conda create -n bipe python=3.10
 conda activate bipe
 pip3 install -r requirements.txt
 ```
+## Data for Finetuning
+We use ScienceQA for downstream finetuning and evaluation.
 
-## Data for Pretraining
-We use [the Pile](uncopyrighted) for pretraining with all copyrighted data removed.
-```shell
-cd BiPE;
-DATA_DIR=./data # the directory to save the data
-python3 download_data.py --dataset-cache-dir $DATA_DIR
-```
+
+## Finetuning
+
 
 ## Pretraining
 The scripts under script/ covers the commands for training and perpleixity evaluation.   

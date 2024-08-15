@@ -169,8 +169,19 @@ def main():
     elif config.rpe_type == 'adape':
         from modeling_llama.adape import AdaLlamaForCausalLM
         LlamaForCausalLM = AdaLlamaForCausalLM
+    elif config.rpe_type== 'ada_rope':
+        from modeling_llama.ada_rope import MyLlamaForCausalLM
+        LlamaForCausalLM = MyLlamaForCausalLM
+    elif config.rpe_type == 'new_rope':
+        from modeling_llama.new_rope import MyLlamaForCausalLM
+        LlamaForCausalLM = MyLlamaForCausalLM
     else:
         raise NotImplementedError
+
+    if 'debug':
+        from modeling_llama.new_rope import MyLlamaForCausalLM
+        LlamaForCausalLM = MyLlamaForCausalLM
+
     model = LlamaForCausalLM.from_pretrained(
         args.model_name_or_path,
         from_tf=bool(".ckpt" in args.model_name_or_path),
@@ -241,6 +252,17 @@ def main():
         desc=f"Grouping texts in chunks of {block_size}",
     )
 
+    def extract_name(path, type):
+        if type == "data":
+            return path.split('_')[-1]
+        elif type == "model":
+            paths = path.split('/')
+            name = [part for part in paths if 'pile' in part][-1]
+            return name.rpartition('_')[0]
+
+    data_name = extract_name(args.dataset_cache_dir, "data")
+    model_name = extract_name(args.model_name_or_path, "model")
+
     eval_dataset = lm_datasets
 
     eval_dataloader = DataLoader(
@@ -270,15 +292,6 @@ def main():
     except OverflowError:
         perplexity = float("inf")
     
-    
-    def extract_name(path, type):
-        if type == "data":
-            return path.split('_')[-1]
-        elif type == "model":
-            return path.split('/')[-1].split('_')[0]
-
-    data_name = extract_name(args.dataset_cache_dir, "data")
-    model_name = extract_name(args.model_name_or_path, "model")
     csv_file = './assets/results.csv'
 
     if accelerator.is_main_process:
