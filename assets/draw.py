@@ -15,7 +15,7 @@ plt.rc('figure', titlesize=BIGGER_SIZE)  # fontsize of the figure title
 
 
 # 读取CSV文件
-df = pd.read_csv('results.csv')
+df = pd.read_csv('new_results.csv')
 
 # 获取唯一的data和model值
 data_values = df['data'].unique()
@@ -46,7 +46,7 @@ for i, data in enumerate(data_values):
 plt.tight_layout()
 
 # 保存图像
-plt.savefig('results_plot.png', dpi=300, transparent=True)
+plt.savefig('new_results_plot.png', dpi=300, transparent=True)
 
 # 显示图形
 plt.show()

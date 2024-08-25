@@ -1,18 +1,16 @@
-[ -z "${OUTPUT_DIR}" ] && OUTPUT_DIR=./output/finetune/big_rope_pile  # path to save checkpoints and tensorboard
+[ -z "${OUTPUT_DIR}" ] && OUTPUT_DIR=./output/finetune/80000_brand_rope_pile  # path to save checkpoints and tensorboard
 [ -z "${DATA_DIR}" ] && DATA_DIR=/zhujiajun/data/pile  # path to load data
 [ -z "${CONFIG_NAME}" ] && CONFIG_NAME=config/new_rope.json # choose from [config/bipe_rope.json, config/bipe_alibi.json, config/rope.json, config/alibi.json]
 
-
 deepspeed --master_port 25012 --include localhost:0,1,2,3,4,5,6,7 train.py \
-    --deepspeed ./ds_config.json \
     --ddp_timeout 18000 \
+    --resume_from_checkpoint true \
     --dataset_cache_dir $DATA_DIR \
     --output_dir $OUTPUT_DIR \
     --config_name $CONFIG_NAME \
-    --model_name_or_path ./output/train/rope_pile/checkpoint-20000 \
-    --resume_from_checkpoint false \
+    --model_name_or_path ./output/train/rope_pile/checkpoint-80000 \
     --max_steps 10000 \
-    --warmup_steps 1000 \
+    --warmup_steps 200 \
     --lr_scheduler_type polynomial \
     --save_steps 1000 \
     --eval_steps 1000 \
@@ -31,4 +29,5 @@ deepspeed --master_port 25012 --include localhost:0,1,2,3,4,5,6,7 train.py \
     --load_best_model_at_end True \
     --report_to "tensorboard" \
     --gradient_checkpointing False \
-    > finetune_big_rope.log 2>&1 &
+    --bf16 True \
+    > log/finetune_brand_rope.log 2>&1 &

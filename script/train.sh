@@ -8,7 +8,7 @@ deepspeed --master_port 25401 --include localhost:0,1,2,3,4,5,6,7 train.py \
     --dataset_cache_dir $DATA_DIR \
     --output_dir $OUTPUT_DIR \
     --config_name $CONFIG_NAME \
-    --resume_from_checkpoint false \
+    --resume_from_checkpoint true \
     --max_steps 100000 \
     --warmup_steps 1000 \
     --lr_scheduler_type polynomial \
@@ -30,4 +30,4 @@ deepspeed --master_port 25401 --include localhost:0,1,2,3,4,5,6,7 train.py \
     --report_to "tensorboard" \
     --gradient_checkpointing False \
     --bf16 True \
-    > rope_train.log 2>&1 &
+    > log/rope_train.log 2>&1 &

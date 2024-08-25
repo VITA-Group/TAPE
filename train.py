@@ -31,8 +31,8 @@ from torch.utils.data import Dataset
 from transformers import Trainer, AutoConfig, default_data_collator, AutoTokenizer
 from datasets import load_dataset, load_from_disk
 
-from modeling_llama.bipe_rope import MyLlamaForCausalLM as MyLlamaForCausalLM_bipe_rope
-from modeling_llama.bipe_alibi import MyLlamaForCausalLM as MyLlamaForCausalLM_bipe_alibi
+from models.llama.bipe_rope import MyLlamaForCausalLM as MyLlamaForCausalLM_bipe_rope
+from models.llama.bipe_alibi import MyLlamaForCausalLM as MyLlamaForCausalLM_bipe_alibi
 
 transformers.logging.set_verbosity_info()
 
@@ -95,13 +95,13 @@ def train():
     elif config.rpe_type == "bipe_alibi" or config.rpe_type == "alibi":
         LlamaForCausalLM = MyLlamaForCausalLM_bipe_alibi
     elif config.rpe_type == 'ada_rope':
-        from modeling_llama.ada_rope import MyLlamaForCausalLM
+        from models.llama.ada_rope import MyLlamaForCausalLM
         LlamaForCausalLM = MyLlamaForCausalLM
     elif config.rpe_type == "adape":
-        from modeling_llama.adape import AdaLlamaForCausalLM
+        from models.llama.add_adape import AdaLlamaForCausalLM
         LlamaForCausalLM = AdaLlamaForCausalLM
     elif config.rpe_type == "new_rope":
-        from modeling_llama.new_rope import MyLlamaForCausalLM
+        from models.llama.new_rope import MyLlamaForCausalLM
         LlamaForCausalLM = MyLlamaForCausalLM
     else:
         raise NotImplementedError
@@ -133,7 +133,7 @@ def train():
     #     model.load_state_dict(filtered_checkpoint, strict=False)
 
     tokenizer = AutoTokenizer.from_pretrained(
-        "llama_tokenizer",
+        "./models/llama/llama_tokenizer",
         use_fast=True,
     )
 
@@ -226,6 +226,7 @@ def train():
         logging.info("*** Start Training ***")
         trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)
         trainer.save_state()
+        # trainer.save_model(output_dir=training_args.output_dir)
         safe_save_model_for_hf_trainer(trainer=trainer, output_dir=training_args.output_dir)
 
     if training_args.do_eval:

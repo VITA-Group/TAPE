@@ -28,8 +28,8 @@ from transformers import (
     default_data_collator,
     get_scheduler,
 )
-from modeling_llama.bipe_rope import MyLlamaForCausalLM as MyLlamaForCausalLM_bipe_rope
-from modeling_llama.bipe_alibi import MyLlamaForCausalLM as MyLlamaForCausalLM_bipe_alibi
+from models.llama.bipe_rope import MyLlamaForCausalLM as MyLlamaForCausalLM_bipe_rope
+from models.llama.bipe_alibi import MyLlamaForCausalLM as MyLlamaForCausalLM_bipe_alibi
 from config_llama import MyLlamaConfig
 
 logger = get_logger(__name__)
@@ -167,20 +167,21 @@ def main():
     elif config.rpe_type == "bipe_alibi" or config.rpe_type == "alibi":
         LlamaForCausalLM = MyLlamaForCausalLM_bipe_alibi
     elif config.rpe_type == 'adape':
-        from modeling_llama.adape import AdaLlamaForCausalLM
+        from models.llama.add_adape import AdaLlamaForCausalLM
         LlamaForCausalLM = AdaLlamaForCausalLM
     elif config.rpe_type== 'ada_rope':
-        from modeling_llama.ada_rope import MyLlamaForCausalLM
+        from models.llama.ada_rope import MyLlamaForCausalLM
         LlamaForCausalLM = MyLlamaForCausalLM
     elif config.rpe_type == 'new_rope':
-        from modeling_llama.new_rope import MyLlamaForCausalLM
+        from models.llama.new_rope import MyLlamaForCausalLM
         LlamaForCausalLM = MyLlamaForCausalLM
     else:
         raise NotImplementedError
 
-    if 'debug':
-        from modeling_llama.new_rope import MyLlamaForCausalLM
-        LlamaForCausalLM = MyLlamaForCausalLM
+    # if 'debug':
+    #     from models.llama.new_rope import MyLlamaForCausalLM
+    #     config.position_size = 36
+    #     LlamaForCausalLM = MyLlamaForCausalLM
 
     model = LlamaForCausalLM.from_pretrained(
         args.model_name_or_path,
@@ -292,7 +293,7 @@ def main():
     except OverflowError:
         perplexity = float("inf")
     
-    csv_file = './assets/results.csv'
+    csv_file = './assets/new_results.csv'
 
     if accelerator.is_main_process:
         import csv
