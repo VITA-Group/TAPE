@@ -36,7 +36,6 @@ from .configuration_llava import LlavaConfig
 
 from transformers import PreTrainedModel
 from transformers.activations import ACT2FN
-from transformers.cache_utils import Cache
 from transformers.modeling_outputs import ModelOutput
 from transformers.utils import (
     add_start_docstrings,
@@ -554,10 +553,12 @@ class LlavaForConditionalGeneration(LlavaPreTrainedModel):
         self, input_ids, past_key_values=None, inputs_embeds=None, pixel_values=None, attention_mask=None, **kwargs
     ):
         if past_key_values is not None:
-            if isinstance(past_key_values, Cache):
+            try:
+                from transformers.cache_utils import Cache
+                assert isinstance(past_key_values, Cache)
                 cache_length = past_key_values.get_seq_length()
                 past_length = past_key_values.seen_tokens
-            else:
+            except:
                 cache_length = past_length = past_key_values[0][0].shape[2]
 
             # Keep only the unprocessed tokens:
