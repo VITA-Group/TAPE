@@ -1,8 +1,8 @@
-type=lora
-torchrun --master_port 29516 --nproc_per_node=8 train_longlora.py  \
+type=adape
+torchrun --master_port 29516 --nproc_per_node=4 train_longlora.py  \
         --ddp_timeout 18000 \
-        --model_name_or_path /zhujiajun/model/Llama-2-7b-hf \
-        --resume_from_checkpoint true \
+        --model_name_or_path meta-llama/Llama-2-7b-hf \
+        --resume_from_checkpoint false \
         --peft_type $type \
         --bf16 true \
         --output_dir ./output/llama_${type} \
@@ -19,8 +19,8 @@ torchrun --master_port 29516 --nproc_per_node=8 train_longlora.py  \
         --weight_decay 0.0     \
         --warmup_steps 50     \
         --lr_scheduler_type "constant_with_warmup"     \
-        --logging_steps 10     \
-        --deepspeed "config/ds_configs/stage3.json" \
+        --logging_steps 1     \
+        --deepspeed "config/ds_configs/stage2.json" \
         --tf32 true \
         --report_to none \
-        --max_steps 1000 > log/train_llama_${type}.log 2>&1 &
+        --max_steps 2000 > log/train_llama_${type}.log 2>&1 &

@@ -406,9 +406,12 @@ class PELlamaAttention(nn.Module):
         # shift
         def shift(qkv, bsz, q_len, group_size, num_heads, head_dim):
             #! half heads's embedding has been shifted half of group_size
-            qkv[:, num_heads // 2:] = qkv[:, num_heads // 2:].roll(-group_size // 2, dims=2)
+            qkv_clone = qkv.clone()
+            qkv_clone[:, num_heads // 2:] = qkv_clone[:, num_heads // 2:].roll(-group_size // 2, dims=2)
+            qkv = qkv_clone
             qkv = qkv.transpose(1, 2).reshape(bsz * (q_len // group_size), group_size, num_heads, head_dim).transpose(1, 2)
             return qkv
+
 
         num_group = 4
         group_size = q_len // num_group
@@ -445,13 +448,14 @@ class PELlamaAttention(nn.Module):
                 )
             attn_weights = attn_weights + attention_mask
 
-
         def unshift(v, reshape=True):
             if reshape:
                 v = v.reshape(bsz, q_len, self.num_heads, self.head_dim)
-            v[:, :, self.num_heads//2:] = v[:, :, self.num_heads//2:].roll(group_size//2, dims=1)
-            # v = v.reshape(bsz, self.num_heads, q_len, self.head_dim)
+            v_clone = v.clone()
+            v_clone[:, :, self.num_heads//2:] = v_clone[:, :, self.num_heads//2:].roll(group_size//2, dims=1)
+            v = v_clone
             return v
+
 
         # upcast attention to fp32
         #? same but need to shift position_state
@@ -479,10 +483,12 @@ class PELlamaAttention(nn.Module):
         attn_output = attn_output.transpose(1, 2).contiguous()
 
         # attn_output (bsz, self.num_heads, q_len, self.head_dim)
-        # attn_output = attn_output.reshape(bsz, q_len, self.num_heads, self.head_dim)
+        attn_output = attn_output.reshape(bsz, q_len, self.num_heads, self.head_dim)
 
         # shift back
-        attn_output[:, :, self.num_heads//2:] = attn_output[:, :, self.num_heads//2:].roll(group_size//2, dims=1)
+        attn_clone = attn_output.clone()
+        attn_clone[:, :, self.num_heads//2:] = attn_clone[:, :, self.num_heads//2:].roll(group_size//2, dims=1)
+        attn_output = attn_clone
         pos_output = (unshift(pos_output[0].transpose(1, 2).contiguous()).transpose(1, 2), unshift(pos_output[1].transpose(1, 2).contiguous()).transpose(1, 2))
         # unshift(position_states[0], reshape=True)
         # unshift(position_states[1], reshape=True)

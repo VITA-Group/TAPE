@@ -183,7 +183,7 @@ def train():
     # data_cache_file = f'./data/RedPajama-Data-1T-Sample/{training_args.model_max_length}/train.arrow'
     data_cache_file = '../data/tokenized_red_pajama/train.arrow'
     # os.makedirs(data_cache_dir, exist_ok=True)
-    dataset = load_dataset("/zhujiajun/data/RedPajama-Data-1T-Sample", cache_dir=training_args.cache_dir)
+    dataset = load_dataset("togethercomputer/RedPajama-Data-1T-Sample", cache_dir=training_args.cache_dir)
     dataset = dataset.map(partial(tokenize_fn, tokenizer), batched=True, num_proc=128, remove_columns=["text", "meta"], cache_file_names={'train': data_cache_file}, load_from_cache_file=True)
 
     if rank == 0:
