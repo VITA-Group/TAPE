@@ -46,7 +46,6 @@ import torch
 class Pg19Dataset(Dataset):
     def __init__(self, data_path: str, seq_length: int, sliding_window: int = 256):
         assert seq_length >= sliding_window, f"Sliding window '{sliding_window}' must be smaller than sequence length '{seq_length}'"
-
         self.seq_length = seq_length
         self.data = np.memmap(data_path, dtype=np.uint16, mode='r')
         self.start_indices = list(range(0, len(self.data) - seq_length, sliding_window))
@@ -92,6 +91,7 @@ class DistributedEvaluator:
         self.gpu_id = gpu_id
         self.batch_size = batch_size
 
+        self.refresh_rate = refresh_rate
         self.model = DDP(model, device_ids=[self.gpu_id])
 
     def evaluate(self, dataset: Dataset, metric: EvalMetric) -> dict[str, object]:
