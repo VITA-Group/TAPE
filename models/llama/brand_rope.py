@@ -26,7 +26,7 @@ import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
-# from transformers.models.llama.modeling_llama import LlamaModel
+from transformers.models.llama.modeling_llama import LlamaModel
 
 # from ...activations import ACT2FN
 # from ...modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast, SequenceClassifierOutputWithPast
@@ -420,7 +420,6 @@ class PELlamaAttention(nn.Module):
         value_states = shift(value_states, bsz, q_len, group_size, self.num_heads, self.head_dim)
 
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
-        
 
         # if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
         #     raise ValueError(

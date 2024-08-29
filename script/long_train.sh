@@ -13,13 +13,13 @@ torchrun --master_port 29516 --nproc_per_node=4 train_longlora.py  \
         --gradient_accumulation_steps 8     \
         --evaluation_strategy "no"     \
         --save_strategy "steps"     \
-        --save_steps 50     \
+        --save_steps 200     \
         --save_total_limit 2     \
         --learning_rate 2e-5     \
         --weight_decay 0.0     \
         --warmup_steps 50     \
         --lr_scheduler_type "constant_with_warmup"     \
-        --logging_steps 1     \
+        --logging_steps 10     \
         --deepspeed "config/ds_configs/stage2.json" \
         --tf32 true \
         --report_to none \

@@ -137,8 +137,12 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
     # sin = sin.squeeze(0).transpose(0, 1)
     cos = cos[:,:,position_ids.squeeze(0),:]  # [bs, num_heads, seq_len, dim] original: [bs, 1, seq_len, dim]
     sin = sin[:,:,position_ids.squeeze(0),:]  # q: [bs, num_heads, seq_len, dim]; cos: [bs, num_heads, seq_len, dim]
-    q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin) if k is not None else None
+    if q.size()[1] != k.size()[1]: # for group attention repeat
+        group_size = q.size()[1] // k.size()[1]
+        cos = cos.repeat(1, group_size, 1, 1)
+        sin = sin.repeat(1, group_size, 1, 1)
+    q_embed = (q * cos) + (rotate_half(q) * sin)
     return q_embed, k_embed
 
 def old_apply_rotary_pos_emb(q, k, cos, sin, position_ids):
@@ -370,8 +374,9 @@ class AdaPEAttention(nn.Module):
 
         # cos, sin = self.rotary_emb(value_states, position_ids)
         # cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, position_states[0], position_states[1], position_ids)
+        # query_states, key_states = apply_rotary_pos_emb(query_states, key_states, position_states[0], position_states[1], position_ids)
             
+        assert past_key_value is None
         if past_key_value is not None:
             # reuse k, v, self_attention
             key_states = torch.cat([past_key_value[0], key_states], dim=2)
@@ -382,6 +387,8 @@ class AdaPEAttention(nn.Module):
         # repeat k/v heads if n_kv_heads < n_heads
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
+
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, position_states[0], position_states[1], position_ids)
 
         # atten: batch_size, num_heads, seq_length, seq_length
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
@@ -398,7 +405,6 @@ class AdaPEAttention(nn.Module):
                 raise ValueError(
                     f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
                 )
-            #! key implementation
             attn_weights = attn_weights + attention_mask
 
         # upcast attention to fp32
@@ -407,7 +413,6 @@ class AdaPEAttention(nn.Module):
         attn_output = torch.matmul(attn_weights, value_states)
         #! update position_states
         pos_output = (torch.matmul(attn_weights, position_states[0]), torch.matmul(attn_weights, position_states[1]))
-        # pos_output = torch.matmul(attn_weights, pos_states)
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
             raise ValueError(
@@ -418,8 +423,6 @@ class AdaPEAttention(nn.Module):
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
 
-        # pos_output = pos_output.transpose(1, 2).contiguous()
-        # pos_output = pos_output.reshape(bsz, q_len, self.position_size)
 
         if self.config.pretraining_tp > 1:
             attn_output = attn_output.split(self.hidden_size // self.config.pretraining_tp, dim=2)
@@ -795,17 +798,17 @@ class AdaLlamaModel(LlamaPreTrainedModel):
 
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
+        # transformer v4.34.0
         # retrieve input_ids and inputs_embeds
         if input_ids is not None and inputs_embeds is not None:
-            raise ValueError("You cannot specify both decoder_input_ids and decoder_inputs_embeds at the same time")
+            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
         elif input_ids is not None:
-            batch_size, seq_length = input_ids.shape[:2]
+            batch_size, seq_length = input_ids.shape
         elif inputs_embeds is not None:
             batch_size, seq_length, _ = inputs_embeds.shape
         else:
-            raise ValueError("You have to specify either decoder_input_ids or decoder_inputs_embeds")
-
-        assert past_key_values is None
+            raise ValueError("You have to specify either input_ids or inputs_embeds")
+        # assert past_key_values is None
 
         seq_length_with_past = seq_length
         past_key_values_length = 0
@@ -823,8 +826,8 @@ class AdaLlamaModel(LlamaPreTrainedModel):
         else:
             position_ids = position_ids.view(-1, seq_length).long()
 
-        assert inputs_embeds is None
-        inputs_embeds = self.embed_tokens(input_ids)
+        if inputs_embeds is None:
+            inputs_embeds = self.embed_tokens(input_ids)
 
         # embed positions
         if attention_mask is None:
@@ -1434,16 +1437,7 @@ def get_adape_model(model, config):
 
     model.config._attn_implementation="eager"
     model.config.position_size = config.position_size
-    model = AdaLlamaModel.from_llama_model(model)
-    # all_config = model.config
-    # all_config.position_size = config.position_size
-    # for name, target in model.named_modules():
-    #     if isinstance(target, LlamaDecoderLayer):
-    #         # module_class = REPLACE_MAPPING[type(target)]
-    #         new_module = AdaLlamaDecoderLayer(all_config, target)
-    #         parent, target, target_name = _get_submodules(model, name)
-
-    #         setattr(parent, target_name, new_module)
+    model.model = AdaLlamaModel.from_llama_model(model.model)
 
     # finally change the model forward function
     for n, p in model.named_parameters():

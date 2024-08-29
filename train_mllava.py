@@ -151,9 +151,22 @@ def load_model(model_args, training_args):
         
     if model_args.mllava_type == "llava":
         from models.mllava import LlavaForConditionalGeneration, MLlavaProcessor, LlavaConfig
+        from models.llama.new_rope import MyLlamaForCausalLM
         processor = MLlavaProcessor.from_pretrained(model_args.model_name_or_path)
+        if model_args.tuner_type == 'adape':
+            config = LlavaConfig.from_pretrained(
+            model_args.model_name_or_path, torch_dtype=torch_dtype, 
+            attn_implementation = model_args.attn_implementation,
+            quantization_config=bnb_config if model_args.qlora_enabled else None,
+            )
+            config.text_config._attn_implementation = model_args.attn_implementation
+            config.text_config.position_size = model_args.position_size
+            language_model = MyLlamaForCausalLM(config.text_config)
+        else:
+            language_model = None
         model = LlavaForConditionalGeneration.from_pretrained(
             model_args.model_name_or_path, torch_dtype=torch_dtype, 
+            language_model=language_model,
             attn_implementation = model_args.attn_implementation,
             quantization_config=bnb_config if model_args.qlora_enabled else None,
         )
@@ -193,7 +206,7 @@ def load_model(model_args, training_args):
             target_modules=find_attention_mlp_layers(),
         )
         model.enable_input_require_grads()
-        model.language_model = get_adape_model(model.language_model, adape_config)
+        # model.language_model = get_adape_model(model.language_model, adape_config)
 
     elif model_args.tuner_type == 'llama_adapter':
         from peft.tuners.adaption_prompt import AdaptionPromptConfig

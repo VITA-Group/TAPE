@@ -107,6 +107,7 @@ def forward_flashattn(
     qkv = qkv.reshape(bsz, q_len, 3, 2, self.num_heads // 2, self.head_dim).permute(0, 3, 1, 2, 4, 5).reshape(bsz * 2, q_len, 3, self.num_heads // 2, self.head_dim)
 
     x = rearrange(qkv, "b s three h d -> b s (three h d)")
+    # hidden_states: (total_nnz:16384=2*8192, ...), indices: (total_nnz), cu_seqlens: (batch + 1:3)
     x_unpad, indices, cu_q_lens, max_s = unpad_input(x, key_padding_mask)
     cu_q_len_tmp = torch.arange(0, max_s, group_size, device=key_padding_mask.device, dtype=cu_q_lens.dtype)
     cu_q_len_tmp = torch.stack([cu_q_len_tmp, cu_q_len_tmp + group_size // 2]).repeat(bsz, 1) + cu_q_lens[:-1].unsqueeze(-1)
@@ -588,6 +589,7 @@ def replace_llama_attn(use_flash_attn=True, use_full=False, inference=False):
                 "ref: https://github.com/HazyResearch/flash-attention/issues/190#issuecomment-1523359593"
             )
         if inference:
+            from transformers.models.llama.modeling_llama import LlamaModel
             transformers.models.llama.modeling_llama.LlamaModel._prepare_decoder_attention_mask = _prepare_decoder_attention_mask_inference
             transformers.models.llama.modeling_llama.LlamaAttention.forward = forward_flashattn_inference
         else:

@@ -26,7 +26,7 @@ import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
-# from transformers.models.llama.modeling_llama import LlamaModel
+from transformers.models.llama.modeling_llama import LlamaModel
 
 # from ...activations import ACT2FN
 # from ...modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast, SequenceClassifierOutputWithPast
@@ -414,8 +414,9 @@ class PELlamaAttention(nn.Module):
 
         
         # (batch_size, num_heads:8, seq_length:1024, head_dim:96)
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, position_states[0], position_states[1], position_ids)
+        # query_states, key_states = apply_rotary_pos_emb(query_states, key_states, position_states[0], position_states[1], position_ids)
             
+        assert past_key_value is None
         if past_key_value is not None:
             # reuse k, v, self_attention
             key_states = torch.cat([past_key_value[0], key_states], dim=2)
@@ -426,6 +427,9 @@ class PELlamaAttention(nn.Module):
         # repeat k/v heads if n_kv_heads < n_heads
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
+
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, position_states[0], position_states[1], position_ids)
+
 
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
@@ -469,6 +473,193 @@ class PELlamaAttention(nn.Module):
 
         return attn_output, pos_output, attn_weights, past_key_value
 
+
+from transformers.models.llama.modeling_llama import pad_input, flash_attn_func, index_first_axis, _get_unpad_data, flash_attn_varlen_func, unpad_input
+class PELlamaFlashAttention2(PELlamaAttention):
+    """
+    Llama flash attention module. This module inherits from `LlamaAttention` as the weights of the module stays
+    untouched. The only required change would be on the forward pass where it needs to correctly call the public API of
+    flash attention and deal with padding tokens in case the input contains any of them.
+    """
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        position_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        output_attentions: bool = False,
+        use_cache: bool = False,
+        padding_mask: Optional[torch.LongTensor] = None,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        # LlamaFlashAttention2 attention does not support output_attentions
+        output_attentions = False
+
+        bsz, q_len, _ = hidden_states.size()
+
+        query_states = self.q_proj(hidden_states)
+        key_states = self.k_proj(hidden_states)
+        value_states = self.v_proj(hidden_states)
+
+        # Flash attention requires the input to have the shape
+        # batch_size x seq_length x head_dime x hidden_dim
+        # therefore we just need to keep the original shape
+        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+
+        kv_seq_len = key_states.shape[-2]
+        if past_key_value is not None:
+            kv_seq_len += past_key_value[0].shape[-2]
+
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, position_states[0], position_states[1], position_ids)
+
+
+        assert past_key_value is None
+        if past_key_value is not None:
+            # reuse k, v, self_attention
+            key_states = torch.cat([past_key_value[0], key_states], dim=2)
+            value_states = torch.cat([past_key_value[1], value_states], dim=2)
+
+        past_key_value = (key_states, value_states) if use_cache else None
+
+        query_states = query_states.transpose(1, 2)
+        key_states = key_states.transpose(1, 2)
+        value_states = value_states.transpose(1, 2)
+
+        # TODO: llama does not have dropout in the config??
+        # It is recommended to use dropout with FA according to the docs
+        # when training.
+        dropout_rate = 0.0  # if not self.training else self.attn_dropout
+
+        # In PEFT, usually we cast the layer norms in float32 for training stability reasons
+        # therefore the input hidden states gets silently casted in float32. Hence, we need
+        # cast them back in float16 just to be sure everything works as expected.
+        # This might slowdown training & inference so it is recommended to not cast the LayerNorms
+        # in fp32. (LlamaRMSNorm handles it correctly)
+        input_dtype = query_states.dtype
+        if input_dtype == torch.float32:
+            logger.warning_once(
+                "The input hidden states seems to be silently casted in float32, this might be related to"
+                " the fact you have upcasted embedding or layer norm layers in float32. We will cast back the input in"
+                " float16."
+            )
+
+            query_states = query_states.to(torch.float16)
+            key_states = key_states.to(torch.float16)
+            value_states = value_states.to(torch.float16)
+
+        attn_output = self._flash_attention_forward(
+            query_states, key_states, value_states, padding_mask, q_len, dropout=dropout_rate
+        )
+        pos_output_0 = self._flash_attention_forward(
+            query_states, key_states, position_states[0].transpose(1, 2), padding_mask, q_len, dropout=dropout_rate
+        )
+        pos_output_1 = self._flash_attention_forward(
+            query_states, key_states, position_states[1].transpose(1, 2), padding_mask, q_len, dropout=dropout_rate
+        )
+        pos_output = (pos_output_0.transpose(1, 2).contiguous(), pos_output_1.transpose(1, 2).contiguous())
+
+        attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
+        attn_output = self.o_proj(attn_output)
+
+        if not output_attentions:
+            attn_weights = None
+
+        return attn_output, pos_output, attn_weights, past_key_value
+
+    def _flash_attention_forward(
+        self, query_states, key_states, value_states, padding_mask, query_length, dropout=0.0, softmax_scale=None
+    ):
+        """
+        Calls the forward method of Flash Attention - if the input hidden states contain at least one padding token
+        first unpad the input, then computes the attention scores and pad the final attention scores.
+
+        Args:
+            query_states (`torch.Tensor`):
+                Input query states to be passed to Flash Attention API
+            key_states (`torch.Tensor`):
+                Input key states to be passed to Flash Attention API
+            value_states (`torch.Tensor`):
+                Input value states to be passed to Flash Attention API
+            padding_mask (`torch.Tensor`):
+                The padding mask - corresponds to a tensor of size `(batch_size, seq_len)` where 0 stands for the
+                position of padding tokens and 1 for the position of non-padding tokens.
+            dropout (`int`, *optional*):
+                Attention dropout
+            softmax_scale (`float`, *optional*):
+                The scaling of QK^T before applying softmax. Default to 1 / sqrt(head_dim)
+        """
+        # Contains at least one padding token in the sequence
+        if padding_mask is not None:
+            batch_size = query_states.shape[0]
+            query_states, key_states, value_states, indices_q, cu_seq_lens, max_seq_lens = self._upad_input(
+                query_states, key_states, value_states, padding_mask, query_length
+            )
+
+            cu_seqlens_q, cu_seqlens_k = cu_seq_lens
+            max_seqlen_in_batch_q, max_seqlen_in_batch_k = max_seq_lens
+
+            attn_output_unpad = flash_attn_varlen_func(
+                query_states,
+                key_states,
+                value_states,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_k=cu_seqlens_k,
+                max_seqlen_q=max_seqlen_in_batch_q,
+                max_seqlen_k=max_seqlen_in_batch_k,
+                dropout_p=dropout,
+                softmax_scale=softmax_scale,
+                causal=True,
+            )
+
+            attn_output = pad_input(attn_output_unpad, indices_q, batch_size, query_length)
+        else:
+            attn_output = flash_attn_func(
+                query_states, key_states, value_states, dropout, softmax_scale=softmax_scale, causal=True
+            )
+
+        return attn_output
+
+    def _upad_input(self, query_layer, key_layer, value_layer, padding_mask, query_length):
+        indices_k, cu_seqlens_k, max_seqlen_in_batch_k = _get_unpad_data(padding_mask)
+        batch_size, kv_seq_len, num_key_value_heads, head_dim = key_layer.shape
+
+        key_layer = index_first_axis(
+            key_layer.reshape(batch_size * kv_seq_len, num_key_value_heads, head_dim), indices_k
+        )
+        value_layer = index_first_axis(
+            value_layer.reshape(batch_size * kv_seq_len, num_key_value_heads, head_dim), indices_k
+        )
+        if query_length == kv_seq_len:
+            query_layer = index_first_axis(
+                query_layer.reshape(batch_size * kv_seq_len, self.num_heads, head_dim), indices_k
+            )
+            cu_seqlens_q = cu_seqlens_k
+            max_seqlen_in_batch_q = max_seqlen_in_batch_k
+            indices_q = indices_k
+        elif query_length == 1:
+            max_seqlen_in_batch_q = 1
+            cu_seqlens_q = torch.arange(
+                batch_size + 1, dtype=torch.int32, device=query_layer.device
+            )  # There is a memcpy here, that is very bad.
+            indices_q = cu_seqlens_q[:-1]
+            query_layer = query_layer.squeeze(1)
+        else:
+            # The -q_len: slice assumes left padding.
+            padding_mask = padding_mask[:, -query_length:]
+            query_layer, indices_q, cu_seqlens_q, max_seqlen_in_batch_q = unpad_input(query_layer, padding_mask)
+
+        return (
+            query_layer,
+            key_layer,
+            value_layer,
+            indices_q,
+            (cu_seqlens_q, cu_seqlens_k),
+            (max_seqlen_in_batch_q, max_seqlen_in_batch_k),
+        )
+
 class PELayer(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -504,11 +695,17 @@ class PELayer(nn.Module):
 def add_tuples(tuple1, tuple2):
     return tuple(a + b for a, b in zip(tuple1, tuple2))
 
+from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 class LlamaDecoderLayer(nn.Module):
     def __init__(self, config: LlamaConfig):
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.self_attn = PELlamaAttention(config=config)
+        # self.self_attn = PELlamaAttention(config=config) 
+        self.self_attn = (
+            PELlamaFlashAttention2(config=config)
+            if getattr(config, "_attn_implementation", "eager") == "flash_attention_2"
+            else PELlamaAttention(config=config)
+        )
         self.mlp = LlamaMLP(config)
         self.pe = PELayer(config)
         self.post_attention_linears = nn.ModuleList(
@@ -631,11 +828,12 @@ class LlamaPreTrainedModel(PreTrainedModel):
                 module.weight.data[module.padding_idx].zero_()
         # if isinstance(self, LlamaModel):
         #! special zero initialization
-        for layer in self.model.layers:
-            nn.init.zeros_(layer.pe.up_proj.weight)
-            # nn.init.zeros_(layer.pe.down_proj.weight)
-            for linear_layer in layer.post_attention_linears:
-                nn.init.zeros_(linear_layer.weight)
+        if isinstance(self, MyLlamaForCausalLM):
+            for layer in self.model.layers:
+                nn.init.zeros_(layer.pe.up_proj.weight)
+                # nn.init.zeros_(layer.pe.down_proj.weight)
+                for linear_layer in layer.post_attention_linears:
+                    nn.init.zeros_(linear_layer.weight)
 
     def _set_gradient_checkpointing(self, module, value=False):
         if isinstance(module, LlamaModel):
@@ -724,7 +922,8 @@ class LlamaModel(LlamaPreTrainedModel):
         self.vocab_size = config.vocab_size
 
         #! here becomes the model-level init
-        self.rotary_emb = AdaRotaryEmbedding(config.hidden_size // config.num_attention_heads, config.num_attention_heads, max_position_embeddings=config.max_position_embeddings, scaling_factor=self.config.rope_scaling['factor'])
+        factor = config.rope_scaling['factor'] if config.rope_scaling else 1
+        self.rotary_emb = AdaRotaryEmbedding(config.hidden_size // config.num_attention_heads, config.num_attention_heads, max_position_embeddings=config.max_position_embeddings, scaling_factor=factor)
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
         self.layers = nn.ModuleList([LlamaDecoderLayer(config) for _ in range(config.num_hidden_layers)])
@@ -841,9 +1040,8 @@ class LlamaModel(LlamaPreTrainedModel):
         else:
             position_ids = position_ids.view(-1, seq_length).long()
 
-        assert inputs_embeds is None
-
-        inputs_embeds = self.embed_tokens(input_ids)
+        if inputs_embeds is None:
+            inputs_embeds = self.embed_tokens(input_ids)
 
         # embed positions
         if attention_mask is None:

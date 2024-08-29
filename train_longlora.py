@@ -66,7 +66,7 @@ class TrainingArguments(transformers.TrainingArguments):
         metadata={"help": "Additional trainable parameters except LoRA weights, if low rank training."},
     )
     resume_from_checkpoint: bool = field(
-        default=True,
+        default=False,
         metadata={"help": "resume from checkpoint of outputdir"},
     )
 
@@ -129,11 +129,11 @@ def train():
 
     # Load model and tokenizer
     if training_args.peft_type == 'adape':
-        from models.llama.brand_rope import MyLlamaForCausalLM
+        from models.llama.new_rope import MyLlamaForCausalLM
         # from transformers.models.llama.modeling_llama import LlamaForCausalLM as MyLlamaForCausalLM
         #! hyperparamter
         config.position_size = 4 * config.num_attention_heads
-        config._attn_implementation = 'eager'
+        config._attn_implementation = 'flash_attention_2' if training_args.use_flash_attn else 'eager'
         model = MyLlamaForCausalLM.from_pretrained(
             model_args.model_name_or_path,
             config=config,
@@ -143,7 +143,7 @@ def train():
     elif training_args.peft_type == 'lora':
         from llama_attn_replace import replace_llama_attn
         replace_llama_attn(training_args.use_flash_attn, training_args.use_full_attn)
-        # config._attn_implementation = 'eager'
+        config._attn_implementation = 'eager'
         model = transformers.AutoModelForCausalLM.from_pretrained(
             model_args.model_name_or_path,
             config=config,

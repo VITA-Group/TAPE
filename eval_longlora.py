@@ -218,6 +218,7 @@ def run_eval(args: EvalArguments):
         config=config,
         cache_dir=args.cache_dir,
         torch_dtype=torch_dtype)
+
     model.resize_token_embeddings(32001)
 
     if args.peft_model:
