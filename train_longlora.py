@@ -179,15 +179,16 @@ def train():
 
     rank = int(os.environ.get('RANK', -1))
     if rank > 0:
-        barrier()
+        barrier(device_ids=[rank])
     # data_cache_file = f'./data/RedPajama-Data-1T-Sample/{training_args.model_max_length}/train.arrow'
-    data_cache_file = '../data/tokenized_red_pajama/train.arrow'
-    # os.makedirs(data_cache_dir, exist_ok=True)
+
+    data_cache_dir = f'../data/tokenized_redpajama/{training_args.model_max_length}'
+    os.makedirs(data_cache_dir, exist_ok=True)
     dataset = load_dataset("togethercomputer/RedPajama-Data-1T-Sample", cache_dir=training_args.cache_dir)
-    dataset = dataset.map(partial(tokenize_fn, tokenizer), batched=True, num_proc=128, remove_columns=["text", "meta"], cache_file_names={'train': data_cache_file}, load_from_cache_file=True)
+    dataset = dataset.map(partial(tokenize_fn, tokenizer), batched=True, num_proc=48, remove_columns=["text", "meta"], cache_file_names={'train': f"{data_cache_dir}/train.arrow"}, load_from_cache_file=True)
 
     if rank == 0:
-        barrier()
+        barrier(device_ids=[0])
 
     print(dataset)
 
