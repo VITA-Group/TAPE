@@ -153,22 +153,9 @@ def load_model(model_args, training_args):
         from models.mllava import LlavaForConditionalGeneration, MLlavaProcessor, LlavaConfig
         from models.llama.new_rope import MyLlamaForCausalLM
         processor = MLlavaProcessor.from_pretrained(model_args.model_name_or_path)
-        if model_args.tuner_type == 'adape':
-            config = LlavaConfig.from_pretrained(
-            model_args.model_name_or_path, torch_dtype=torch_dtype, 
-            attn_implementation = model_args.attn_implementation,
-            quantization_config=bnb_config if model_args.qlora_enabled else None,
-            )
-            config.text_config._attn_implementation = model_args.attn_implementation
-            config.text_config.position_size = model_args.position_size
-            language_model = MyLlamaForCausalLM(config.text_config)
-            language_model = None
-        else:
-            language_model = 1
         use_adape = True if model_args.tuner_type == 'adape' else False
         model = LlavaForConditionalGeneration.from_pretrained(
             model_args.model_name_or_path, use_adape, torch_dtype=torch_dtype, 
-            language_model=language_model,
             attn_implementation = model_args.attn_implementation,
             quantization_config=bnb_config if model_args.qlora_enabled else None,
         )

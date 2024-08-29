@@ -1,6 +1,9 @@
 # Byte-compiled / optimized / DLL files
 output/
 wandb/
+script/
+*.sh
+.vscode/
 __pycache__/
 *.py[cod]
 *$py.class
