@@ -167,6 +167,14 @@ class LlavaPreTrainedModel(PreTrainedModel):
             module.weight.data.normal_(mean=0.0, std=std)
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
+        #! special zero initialization
+        # from models.llama.new_rope import MyLlamaForCausalLM 
+        if isinstance(self, LlavaPreTrainedModel):
+            for layer in self.language_model.model.layers:
+                layer.pe.up_proj.weight.data.zero_()
+                # nn.init.zeros_(layer.pe.down_proj.weight)
+                for linear_layer in layer.post_attention_linears:
+                    linear_layer.weight.data.zero_()
 
     @property
     def _supports_sdpa(self):
@@ -248,15 +256,23 @@ LLAVA_INPUTS_DOCSTRING = r"""
     LLAVA_START_DOCSTRING,
 )
 class LlavaForConditionalGeneration(LlavaPreTrainedModel):
-    def __init__(self, config: LlavaConfig, vision_tower=None, language_model=None):
+    def __init__(self, config: LlavaConfig, use_adape: bool, vision_tower=None, language_model=None):
         super().__init__(config)
         self.vision_tower = AutoModel.from_config(config.vision_config) if vision_tower is None else vision_tower
 
         self.multi_modal_projector = LlavaMultiModalProjector(config)
         self.vocab_size = config.vocab_size
-        self.language_model = AutoModelForCausalLM.from_config(
+        if use_adape:
+            from models.llama.new_rope import MyLlamaForCausalLM
+            text_config = config.text_config
+            text_config.position_size = 4 * text_config.num_attention_heads
+            text_config._attn_implementation = config._attn_implementation
+            self.language_model = MyLlamaForCausalLM(config.text_config)
+        else:
+            self.language_model = AutoModelForCausalLM.from_config(
             config.text_config, attn_implementation=config._attn_implementation
-        ) if language_model is None else language_model
+            )
+        self.language_model = language_model if language_model is not None else self.language_model
         self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
         self.post_init()
 
