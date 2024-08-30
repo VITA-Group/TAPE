@@ -1,20 +1,19 @@
 export TYPE=adape
 export NNODES=1
 export NGPUS=4
-NTASKS=$((NNODES * NGPUS))
-if [ -z "$SLURM_JOB_NAME" ] || [[ "$SLURM_JOB_NAME" == "interactive" ]]; then
-  bash script/long_train.sh # > log/train_llama_$TYPE.log 2>&1 &
+# NTASKS=$((NNODES * NGPUS))
+if [[ "$SLURM_JOB_NAME" == "interactive" ]]; then
+  bash script/train_mllava.sh # > log/train_llama_$TYPE.log 2>&1 &
 else
-  sbatch -o log/train_llama_$TYPE.log \
-        -t 1:00:00 \
-        -J $TYPE \
-        --ntasks=$NTASKS \
-        --cpus-per-task=12 \
-        --constraint=gpu80 \
+  sbatch -o log/train_mm_$TYPE.log \
+        -t 24:00:00 \
+        -J "mm_$TYPE" \
+        --ntasks=$NNODES \
+        --cpus-per-task=48 \
+        --gpus-per-task=$NGPUS \
         --nodes=$NNODES \
         --gres=gpu:$NGPUS \
-        --mail-type=begin \
-        --mail-type=end \
+        --mail-type=all \
         --mail-user=zhuconv@gmail.com \
-        script/long_train.sh
+        script/train_mllava.sh
 fi

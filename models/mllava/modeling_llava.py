@@ -169,7 +169,7 @@ class LlavaPreTrainedModel(PreTrainedModel):
                 module.weight.data[module.padding_idx].zero_()
         #! special zero initialization
         # from models.llama.new_rope import MyLlamaForCausalLM 
-        if isinstance(self, LlavaPreTrainedModel):
+        if isinstance(self, LlavaForConditionalGeneration) and hasattr(self.language_model.model.layers[0], "pe"):
             for layer in self.language_model.model.layers:
                 layer.pe.up_proj.weight.data.zero_()
                 # nn.init.zeros_(layer.pe.down_proj.weight)
@@ -263,7 +263,8 @@ class LlavaForConditionalGeneration(LlavaPreTrainedModel):
         self.multi_modal_projector = LlavaMultiModalProjector(config)
         self.vocab_size = config.vocab_size
         if use_adape:
-            from models.llama.new_rope import MyLlamaForCausalLM
+            from models.llama.high_rope import MyLlamaForCausalLM
+            # from transformers.models.llama.modeling_llama import LlamaForCausalLM as MyLlamaForCausalLM
             text_config = config.text_config
             text_config.position_size = 4 * text_config.num_attention_heads
             text_config._attn_implementation = config._attn_implementation

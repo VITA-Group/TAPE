@@ -3,6 +3,7 @@ output/
 wandb/
 script/
 *.sh
+.vscode/
 __pycache__/
 *.py[cod]
 *$py.class

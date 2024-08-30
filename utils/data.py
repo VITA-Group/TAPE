@@ -129,7 +129,7 @@ class ChatDataset(torch.utils.data.Dataset):
             else:
                 self.print(f"Loading dataset '{data_path}' {name} {split} from online huggingface datasets")
                 if data_path == "TIGER-Lab/Mantis-Instruct":
-                    data_path = "/zhujiajun/data/Mantis-Instruct"
+                    # data_path = "/zhujiajun/data/Mantis-Instruct"
                     self.data = datasets.load_dataset(data_path, name, split=split, trust_remote_code=True, revision=revision)
                     from functools import partial
                     def map_image_path_to_absolute_path(image_dir, item):
