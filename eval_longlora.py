@@ -213,11 +213,21 @@ def run_eval(args: EvalArguments):
         config.rope_scaling = {"type": "linear", "factor": scaling_factor}
 
     # Load model and tokenizer
-    model = transformers.AutoModelForCausalLM.from_pretrained(
-        args.base_model,
+    # Load model and tokenizer
+    if "adape" in args.base_model:
+        from models.llama.new_rope import MyLlamaForCausalLM
+        # use_flash_attn = True if "flash" in args.base_model else False
+        # config._attn_implementation = 'flash_attention_2' if use_flash_attn else 'eager'
+        model = MyLlamaForCausalLM.from_pretrained(args.base_model,
         config=config,
         cache_dir=args.cache_dir,
         torch_dtype=torch_dtype)
+    else:
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            args.base_model,
+            config=config,
+            cache_dir=args.cache_dir,
+            torch_dtype=torch_dtype)
 
     model.resize_token_embeddings(32001)
 

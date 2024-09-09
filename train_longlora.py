@@ -35,6 +35,15 @@ DEFAULT_EOS_TOKEN = "</s>"
 DEFAULT_BOS_TOKEN = "<s>"
 DEFAULT_UNK_TOKEN = "<unk>"
 
+import sys
+# 获取当前文件所在的目录以及上级目录
+current_directory = os.path.dirname(os.path.abspath(__file__))
+parent_directory = os.path.dirname(current_directory)
+# 将目录添加到 sys.path
+sys.path.append(current_directory)
+sys.path.append(parent_directory)
+# print("sys.path:", sys.path)
+
 
 @dataclass
 class ModelArguments:
@@ -43,6 +52,7 @@ class ModelArguments:
 
 @dataclass
 class TrainingArguments(transformers.TrainingArguments):
+    
     cache_dir: Optional[str] = field(default=None)
     optim: str = field(default="adamw_torch")
     model_max_length: int = field(
@@ -140,13 +150,30 @@ def train():
             cache_dir=training_args.cache_dir,
             torch_dtype=torch.bfloat16, 
         )
-    elif training_args.peft_type == 'lora':
+    elif training_args.peft_type == 'longlora':
         from llama_attn_replace import replace_llama_attn
         replace_llama_attn(training_args.use_flash_attn, training_args.use_full_attn)
-        config._attn_implementation = 'eager'
+        # config._attn_implementation = 'eager'
         model = transformers.AutoModelForCausalLM.from_pretrained(
             model_args.model_name_or_path,
             config=config,
+            use_flash_attention_2=False,
+            cache_dir=training_args.cache_dir,
+            torch_dtype=torch.bfloat16,
+        )
+    elif training_args.peft_type == 'lora':
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_args.model_name_or_path,
+            config=config,
+            use_flash_attention_2=True,
+            cache_dir=training_args.cache_dir,
+            torch_dtype=torch.bfloat16,
+        )
+    elif training_args.peft_type == 'ft':
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_args.model_name_or_path,
+            config=config,
+            use_flash_attention_2=True,
             cache_dir=training_args.cache_dir,
             torch_dtype=torch.bfloat16,
         )
@@ -221,9 +248,9 @@ def train():
         # # model.enable_input_require_grads()
         # model.model = get_adape_model(model.model, adape_config)
         #? for efficiency
-        # for n, p in model.named_parameters():
-        #     if not any([i in n for i in ('pe', 'rotary_emb', 'post_attention_linears')]):
-        #         p.requires_grad = False
+        for n, p in model.named_parameters():
+            if not any([i in n for i in ('pe', 'rotary_emb', 'post_attention_linears')]):
+                p.requires_grad = False
 
         #! might be useful
         [p.requires_grad_() for n, p in model.named_parameters() if any([k in n for k in training_args.trainable_params.split(",")])]

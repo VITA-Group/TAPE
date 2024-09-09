@@ -156,60 +156,6 @@ class AdaRotaryEmbedding(torch.nn.Module):
         )
 
 
-class MyLlamaRotaryEmbedding(torch.nn.Module):
-    def __init__(self, dim, num_heads, max_position_embeddings=2048, base=10000, device=None):
-        super().__init__()
-        self.num_heads = num_heads
-        self.dim = dim
-        self.max_position_embeddings = max_position_embeddings
-        self.base = base
-        inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float().to(device) / self.dim))
-        self.register_buffer("inv_freq", inv_freq, persistent=False)
-
-        # 初始化参数缓存
-        self.cos_cached = torch.nn.Parameter(torch.empty(1, self.num_heads, max_position_embeddings, dim))
-        self.sin_cached = torch.nn.Parameter(torch.empty(1, self.num_heads, max_position_embeddings, dim))
-        
-        # 预先计算cos_cached和sin_cached
-        self._set_cos_sin_cache(
-            seq_len=max_position_embeddings, device=self.inv_freq.device, dtype=torch.get_default_dtype()
-        )
-
-    def _set_cos_sin_cache(self, seq_len, device, dtype):
-        self.max_seq_len_cached = seq_len
-        t = torch.arange(self.max_seq_len_cached, device=device, dtype=self.inv_freq.dtype)
-
-        freqs = torch.einsum("i,j->ij", t, self.inv_freq)
-        # 使用不同的排列顺序来获得相同的计算结果
-        emb = torch.cat((freqs, freqs), dim=-1)
-        
-        # 将cos_cached和sin_cached更新为nn.Parameter
-        with torch.no_grad():  # 在初始化时我们不想要梯度计算
-            cos_emb = emb.cos()[None, None, :, :].to(dtype)
-            sin_emb = emb.sin()[None, None, :, :].to(dtype)
-            
-            self.cos_cached.copy_(cos_emb.repeat(1, self.num_heads, 1, 1))
-            self.sin_cached.copy_(sin_emb.repeat(1, self.num_heads, 1, 1))
-
-
-    def forward(self, x, seq_len=None):
-        # x: [bs, num_attention_heads, seq_len, head_size]
-        if seq_len > self.max_seq_len_cached:
-            multiplier = seq_len // self.max_seq_len_cached if seq_len % self.max_seq_len_cached == 0 else seq_len // self.max_seq_len_cached + 1
-            cos, sin = extend_seq_length(self.cos_cached, self.sin_cached, multiplier)
-            self.cos_cached, self.sin_cached = torch.nn.Parameter(cos), torch.nn.Parameter(sin),
-            self.max_seq_len_cached = multiplier * seq_len
-        #     self._set_cos_sin_cache(seq_len=seq_len, device=x.device, dtype=x.dtype)
-        batch_size = x.size(0)
-
-        cos_cached_expanded = self.cos_cached[:, :, :seq_len, ...].expand(batch_size, -1, -1, -1)
-        sin_cached_expanded = self.sin_cached[:, :, :seq_len, ...].expand(batch_size, -1, -1, -1)
-
-        return (
-            cos_cached_expanded.to(dtype=x.dtype),
-            sin_cached_expanded.to(dtype=x.dtype),
-        )
-
 class LlamaRotaryEmbedding(torch.nn.Module):
     def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None):
         super().__init__()
@@ -416,13 +362,14 @@ class PELlamaAttention(nn.Module):
 
         past_key_value = getattr(self, "past_key_value", past_key_value)
 
-        assert past_key_value is None
-        if past_key_value is not None:
-            # sin and cos are specific to RoPE models; cache_position needed for the static cache
-            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+        # assert past_key_value is None
+        # if past_key_value is not None:
+        #     # sin and cos are specific to RoPE models; cache_position needed for the static cache
+        #     cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+        #     key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
         
         # (batch_size, num_heads:8, seq_length:1024, head_dim:96)
+        # change to the bottom
         # query_states, key_states = apply_rotary_pos_emb(query_states, key_states, position_states[0], position_states[1], position_ids)
             
 
@@ -465,6 +412,8 @@ class PELlamaAttention(nn.Module):
 
         if not output_attentions:
             attn_weights = None
+        if not use_cache:
+            past_key_value = None
 
         return attn_output, pos_output, attn_weights, past_key_value
 
@@ -921,10 +870,11 @@ class LlamaPreTrainedModel(PreTrainedModel):
         #! special zero initialization
         if isinstance(self, MyLlamaForCausalLM):
             for layer in self.model.layers:
-                nn.init.zeros_(layer.pe.up_proj.weight)
+                layer.pe.up_proj.weight.data.zero_()
+                # nn.init.zeros_()
                 # nn.init.zeros_(layer.pe.down_proj.weight)
                 for linear_layer in layer.post_attention_linears:
-                    nn.init.zeros_(linear_layer.weight)
+                    linear_layer.weight.data.zero_()
 
     def _set_gradient_checkpointing(self, module, value=False):
         if isinstance(module, LlamaModel):
@@ -1084,6 +1034,7 @@ class LlamaModel(LlamaPreTrainedModel):
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
         use_cache = use_cache if use_cache is not None else self.config.use_cache
+        # print("use_cache is setting to ", use_cache, self.config.use_cache) 
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if (input_ids is None) ^ (inputs_embeds is not None):

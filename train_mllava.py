@@ -17,9 +17,7 @@ os.environ["WANDB_RUN_ID"] = wandb.util.generate_id()
 IGNORE_INDEX = -100
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-import os
 import sys
-
 # 获取当前文件所在的目录以及上级目录
 current_directory = os.path.dirname(os.path.abspath(__file__))
 parent_directory = os.path.dirname(current_directory)
@@ -168,6 +166,7 @@ def load_model(model_args, training_args):
         if "vision_tower" in name:
             param.requires_grad = False
 
+    
     if bnb_config:
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=training_args.gradient_checkpointing)
 
@@ -187,14 +186,18 @@ def load_model(model_args, training_args):
         model = get_peft_model(model, lora_config)
 
     elif model_args.tuner_type == 'adape':
-        def find_attention_mlp_layers():
-            return []
-        from models.adape import AdaPEConfig, get_adape_model
-        adape_config = AdaPEConfig(
-            position_size=model_args.position_size,
-            target_modules=find_attention_mlp_layers(),
-        )
-        model.enable_input_require_grads()
+        pass
+        # def find_attention_mlp_layers():
+        #     return []
+        # from models.adape import AdaPEConfig, get_adape_model
+        # adape_config = AdaPEConfig(
+        #     position_size=model_args.position_size,
+        #     target_modules=find_attention_mlp_layers(),
+        # )
+        # model.enable_input_require_grads()
+        # for name, param in model.named_parameters():
+        #     if not any(substring in name for substring in ["post_attention_linears", "pe", "inv_freq"]):
+        #         param.requires_grad = False
         # model.language_model = get_adape_model(model.language_model, adape_config)
 
     elif model_args.tuner_type == 'llama_adapter':
@@ -219,7 +222,7 @@ def main(
     data_args: DataArguments,
     model_args: ModelArguments,
 ):
-    training_args.output_dir = Path(training_args.output_dir) / model_args.model_name_or_path.split("/")[-1] / training_args.run_name
+    training_args.output_dir = Path(training_args.output_dir) / training_args.run_name
     
     training_args.output_dir.mkdir(parents=True, exist_ok=True)
     training_args.output_dir = str(training_args.output_dir)

@@ -256,7 +256,7 @@ LLAVA_INPUTS_DOCSTRING = r"""
     LLAVA_START_DOCSTRING,
 )
 class LlavaForConditionalGeneration(LlavaPreTrainedModel):
-    def __init__(self, config: LlavaConfig, use_adape: bool, vision_tower=None, language_model=None):
+    def __init__(self, config: LlavaConfig, use_adape: bool, vision_tower=None, language_model=None, use_cache=False):
         super().__init__(config)
         self.vision_tower = AutoModel.from_config(config.vision_config) if vision_tower is None else vision_tower
 
@@ -268,7 +268,8 @@ class LlavaForConditionalGeneration(LlavaPreTrainedModel):
             text_config = config.text_config
             text_config.position_size = 4 * text_config.num_attention_heads
             text_config._attn_implementation = config._attn_implementation
-            self.language_model = MyLlamaForCausalLM(config.text_config)
+            text_config.use_cache = use_cache
+            self.language_model = MyLlamaForCausalLM(text_config)
         else:
             self.language_model = AutoModelForCausalLM.from_config(
             config.text_config, attn_implementation=config._attn_implementation
@@ -313,6 +314,7 @@ class LlavaForConditionalGeneration(LlavaPreTrainedModel):
         # 1. Create a mask to know where special image tokens are
         special_image_token_mask = input_ids == self.config.image_token_index
         num_special_image_tokens = torch.sum(special_image_token_mask, dim=-1)
+        # print("num_images: ", num_images, "\tnum_special_image_tokens: ", num_special_image_tokens)
         # Compute the maximum embed dimension
         max_embed_dim = (num_special_image_tokens.max() * (num_image_patches - 1)) + sequence_length
         batch_indices, non_image_indices = torch.where(input_ids != self.config.image_token_index)

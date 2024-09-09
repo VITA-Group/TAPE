@@ -711,12 +711,12 @@ class LlamaDecoderLayer(nn.Module):
         )
         self.mlp = LlamaMLP(config)
         self.pe = PELayer(config)
-        self.post_attention_linears = nn.ModuleList(
-            nn.Linear(config.num_attention_heads, config.num_attention_heads, bias=False) 
-            for _ in range(2)
-        )
-        # for linear_layer in self.post_attention_linears:
-        #     nn.init.zeros_(linear_layer.weight)
+        # self.post_attention_linears = nn.ModuleList(
+        #     nn.Linear(config.num_attention_heads, config.num_attention_heads, bias=False) 
+        #     for _ in range(2)
+        # )
+        self.post_attention_linear = nn.Linear(config.num_attention_heads, config.num_attention_heads, bias=False) 
+
                 
         self.input_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -763,9 +763,10 @@ class LlamaDecoderLayer(nn.Module):
             use_cache=use_cache,
         )
         hidden_states = residual + hidden_states
+        # postition_state: [bs, num_attention_heads, seq_len, head_size]
         position_states = tuple(
-            torch.einsum('bqnd,qe->bqnd', position_states[idx], linear_layer.weight)
-            for idx, linear_layer in enumerate(self.post_attention_linears)
+            torch.einsum('bqnd,qe->bqnd', position_states[idx], self.post_attention_linear.weight)
+            for idx in range(2)
         )
         position_states = add_tuples(position_states, pos_residual)
 
@@ -836,8 +837,9 @@ class LlamaPreTrainedModel(PreTrainedModel):
             for layer in self.model.layers:
                 nn.init.zeros_(layer.pe.up_proj.weight)
                 # nn.init.zeros_(layer.pe.down_proj.weight)
-                for linear_layer in layer.post_attention_linears:
-                    nn.init.zeros_(linear_layer.weight)
+                nn.init.zeros_(layer.post_attention_linear.weight)
+                # for linear_layer in layer.post_attention_linears:
+                #     nn.init.zeros_(linear_layer.weight)
 
     def _set_gradient_checkpointing(self, module, value=False):
         if isinstance(module, LlamaModel):
@@ -927,7 +929,8 @@ class LlamaModel(LlamaPreTrainedModel):
 
         #! here becomes the model-level init
         factor = config.rope_scaling['factor'] if config.rope_scaling else 1
-        self.rotary_emb = AdaRotaryEmbedding(config.hidden_size // config.num_attention_heads, config.num_attention_heads, max_position_embeddings=config.max_position_embeddings, base=config.rope_theta, scaling_factor=factor)
+        rope_theta = config.rope_theta if hasattr(config, "rope_theta") else 10000
+        self.rotary_emb = AdaRotaryEmbedding(config.hidden_size // config.num_attention_heads, config.num_attention_heads, max_position_embeddings=config.max_position_embeddings, base=rope_theta, scaling_factor=factor)
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
         self.layers = nn.ModuleList([LlamaDecoderLayer(config) for _ in range(config.num_hidden_layers)])

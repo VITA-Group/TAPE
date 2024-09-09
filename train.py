@@ -42,7 +42,6 @@ class ModelArguments:
     model_name_or_path: Optional[str] = field(default=None)
 
 
-
 @dataclass
 class DataArguments:
     dataset_cache_dir: str = field(default=None, metadata={"help": "Path to the data."})
@@ -94,19 +93,20 @@ def train():
         LlamaForCausalLM = MyLlamaForCausalLM_bipe_rope
     elif config.rpe_type == "bipe_alibi" or config.rpe_type == "alibi":
         LlamaForCausalLM = MyLlamaForCausalLM_bipe_alibi
-    elif config.rpe_type == 'ada_rope':
-        from models.llama.ada_rope import MyLlamaForCausalLM
-        LlamaForCausalLM = MyLlamaForCausalLM
+    # elif config.rpe_type == 'ada_rope':
+    #     from models.llama.ada_rope import MyLlamaForCausalLM
+    #     LlamaForCausalLM = MyLlamaForCausalLM
+    # elif config.rpe_type == "adape":
+    #     from models.llama.add_adape import AdaLlamaForCausalLM
+    #     LlamaForCausalLM = AdaLlamaForCausalLM
     elif config.rpe_type == "adape":
-        from models.llama.add_adape import AdaLlamaForCausalLM
-        LlamaForCausalLM = AdaLlamaForCausalLM
-    elif config.rpe_type == "new_rope":
         from models.llama.new_rope import MyLlamaForCausalLM
         LlamaForCausalLM = MyLlamaForCausalLM
     else:
         raise NotImplementedError
 
     if model_args.model_name_or_path:
+        config.use_flash_attention_2 = False
         model = LlamaForCausalLM.from_pretrained(
             model_args.model_name_or_path,
             config=config,
@@ -115,6 +115,7 @@ def train():
             n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
             print(f"Finetuning model from {model_args.model_name_or_path} - Model Size={n_params/2**20:.2f}M parameters")
     else:
+        config.use_flash_attention_2 = True
         model = LlamaForCausalLM(config)
         n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
         if training_args.local_rank == 0:
@@ -137,15 +138,119 @@ def train():
         use_fast=True,
     )
 
-    raw_datasets = load_from_disk(data_args.dataset_cache_dir)
-    # raw_datasets = load_dataset('monology/pile-uncopyrighted')
+    def load_json_dataset(dataset_dir, sanity_check=False):
+        import os, glob, random, copy
+        dataset_subsample_rate = 0.1
+        test_split_percentage = 0.03
+        def uniform_sample_list(file_list, subsample_rate):
+            if not 0 < subsample_rate <= 1:
+                raise ValueError(f'subsample_rate 应该是 (0, 1] 之间的浮点数，但得到了 {subsample_rate}')
+    
+            sample_size = int(len(file_list) * subsample_rate)  # 计算采样数量
+            return random.sample(file_list, sample_size)
+        def print_rank_0(*msg):
+            local_rank = int(os.getenv("LOCAL_RANK", "0"))
+            if local_rank != 0:
+                return
+            print(*msg)
+    
+        if not os.path.exists(dataset_dir):
+            raise ValueError(f'The sepcified data path does not exist: {dataset_dir}')
+    
+        data_files = {
+            'train': [],
+            'validation': [],
+            'test': []
+        }
+    
+        # json_suffices = ['jsonl.zstd', 'jsonl.zst', "json"]
+        # for suffix in json_suffices:
+        suffix = "json"
+        data_files['train'] += glob.glob(f'*train*.{suffix}', root_dir=dataset_dir, recursive=True)
+        data_files['validation'] += glob.glob(f'*validation*.{suffix}', root_dir=dataset_dir, recursive=True)
+    
+        data_files['train'] = sorted(data_files['train'])
+        data_files['train'] = [os.path.join(dataset_dir, filename) for filename in data_files['train']]
+        data_files['validation'] = sorted(data_files['validation'])
+        data_files['validation'] = [os.path.join(dataset_dir, filename) for filename in data_files['validation']]
+        print(data_files['train'][0])
+        print(data_files['validation'][0])
+    
+        if dataset_subsample_rate is not None and dataset_subsample_rate < 1.0:
+            data_files['train'] = uniform_sample_list(data_files['train'], dataset_subsample_rate)
+    
+    
+        if test_split_percentage > 0.:
+            # total_valid_files = max(1, int(len(data_files['train']) * data_args.validation_split_percentage))
+            # stride = math.floor(len(data_files['train']) / total_valid_files)
+            # data_files['test'] = copy.deepcopy(data_files['train'][::stride])
+    
+            data_files['test'] = copy.deepcopy(uniform_sample_list(data_files['train'], test_split_percentage))
+            data_files['train'] = [fn for fn in data_files['train'] if fn not in data_files['test']]
+    
+        # only load one shard for a quick test
+        if sanity_check:
+            data_files['train'] = data_files['train'][:1]
+            if len(data_files['test']) > 1:
+                data_files['test'] = data_files['test'][:1]
+    
+        # remove train/test set to accelerate data loading if training/validation only
+        if not training_args.do_train:
+            data_files.pop('train')
+    
+        if not training_args.do_eval:
+            data_files.pop('validation')
+        
+        if not training_args.do_predict:
+            data_files.pop("test")
+    
+        print_rank_0(f"Loading json dataset from {dataset_dir}, {len(data_files.get('train', []))} train files, {len(data_files.get('test', []))} test files")
+        raw_datasets = load_dataset("json", data_files=data_files, streaming=True)
+    
+        return raw_datasets
+    
+    raw_datasets = load_json_dataset("/scratch/gpfs/DATASETS/hugging_face/c4/en")
+    # raw_datasets = load_dataset("/scratch/gpfs/DATASETS/hugging_face/c4/en", split={"train": "train[:10%]", "validation": "validation"}, chunksize=10<<23)
+    # raw_datasets = load_dataset("/scratch/gpfs/DATASETS/hugging_face/c4/en", split={"train": "train[:10%]", "validation": "validation"}, streaming=True)
 
-    column_names = raw_datasets["train"].column_names
-    text_column_name = "text" if "text" in column_names else column_names[0]
+    def infer_columns_of_dataset(raw_datasets):
+        default_cols = raw_datasets.features
+    
+        if default_cols is not None:
+            return list(default_cols)
+    
+        first_example = next(iter(raw_datasets))
+        if isinstance(first_example, dict):
+            return list(first_example.keys())
+        else:
+            raise ValueError(f'Unable to infer column names from the data type: {type(first_example)}')
 
+    if training_args.do_train:
+        column_names = infer_columns_of_dataset(raw_datasets["train"])
+    else:
+        column_names = infer_columns_of_dataset(raw_datasets["test"])
+    print(column_names)
+
+    # column_names = raw_datasets["train"].column_names
+    # text_column_name = "text" if "text" in column_names else column_names[0]
+
+    # def tokenize_function(examples):
+    #     # print("max_length", tokenizer.model_max_length)
+    #     # tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+    #     return tokenizer(examples["text"])
+
+    tok_logger = transformers.utils.logging.get_logger("transformers.tokenization_utils_base")
+    # from transformers.testing_utils import CaptureLogger 
     def tokenize_function(examples):
-        return tokenizer(examples[text_column_name])
-     
+        # with CaptureLogger(tok_logger) as cl:
+        output = tokenizer(examples["text"])
+        # clm input could be much much longer than block_size
+        # if "Token indices sequence length is longer than the" in cl.out:
+            # tok_logger.warning(
+            #     "^^^^^^^^^^^^^^^^ Please ignore the warning above - this long input will be chunked into smaller bits"
+            #     " before being passed to the model."
+            # )
+        return output
 
     if training_args.local_rank > 0: 
         torch.distributed.barrier()
@@ -154,49 +259,72 @@ def train():
     tokenized_datasets = raw_datasets.map(
         tokenize_function,
         batched=True,
-        num_proc=64,
+        # num_proc=48,
         remove_columns=column_names,
-        load_from_cache_file=True,
-        cache_file_names={"train": f"{data_args.dataset_cache_dir}/tokenized/tokenized_datasets_train.arrow",\
-            "validation": f"{data_args.dataset_cache_dir}/tokenized/tokenized_datasets_validation.arrow", \
-            "test": f"{data_args.dataset_cache_dir}/tokenized/tokenized_datasets_test.arrow"},
-        desc="Running tokenizer on dataset",
+        # load_from_cache_file=False,
+        # keep_in_memory=True,
+        # cache_file_names={
+        #     "train": f"{data_args.dataset_cache_dir}/tokenized/tokenized_datasets_train.arrow", 
+        #     "validation": f"{data_args.dataset_cache_dir}/tokenized/tokenized_datasets_validation.arrow"
+        #     },
+            # desc="Running tokenizer on dataset"
     )
 
     # Main data processing function that will concatenate all texts from our dataset and generate chunks of block_size.
     def group_texts(examples):
+        block_size = config.train_scale
         # Concatenate all texts.
+        # print(examples.keys())
         concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
         total_length = len(concatenated_examples[list(examples.keys())[0]])
-        # We drop the small remainder, and if the total_length < block_size  we exclude this batch and return an empty dict.
-        # We could add padding if the model supported it instead of this drop, you can customize this part to your needs.
-        total_length = (total_length // config.train_scale) * config.train_scale
+
+        # We drop the small remainder, we could add padding if the model supported it instead of this drop, you can
+        # customize this part to your needs.
+        if total_length >= block_size:
+            total_length = (total_length // block_size) * block_size
+
         # Split by chunks of max_len.
         result = {
-            k: [t[i : i + config.train_scale] for i in range(0, total_length, config.train_scale)]
+            k: [t[i: i + block_size] for i in range(0, total_length, block_size)]
             for k, t in concatenated_examples.items()
         }
         result["labels"] = result["input_ids"].copy()
+
         return result
+    # def group_texts(examples):
+    #     # Concatenate all texts.
+    #     concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
+    #     total_length = len(concatenated_examples[list(examples.keys())[0]])
+    #     # We drop the small remainder, and if the total_length < block_size  we exclude this batch and return an empty dict.
+    #     # We could add padding if the model supported it instead of this drop, you can customize this part to your needs.
+    #     total_length = (total_length // config.train_scale) * config.train_scale
+    #     # Split by chunks of max_len.
+    #     result = {
+    #         k: [t[i : i + config.train_scale] for i in range(0, total_length, config.train_scale)]
+    #         for k, t in concatenated_examples.items()
+    #     }
+    #     result["labels"] = result["input_ids"].copy()
+    #     return result
 
     os.makedirs(f"{data_args.dataset_cache_dir}/{config.train_scale}", exist_ok=True)
     lm_datasets = tokenized_datasets.map(
         group_texts,
         batched=True,
-        num_proc=64,
-        load_from_cache_file=True,
-        cache_file_names={"train": f"{data_args.dataset_cache_dir}/{config.train_scale}/lm_datasets_train.arrow",\
-            "validation": f"{data_args.dataset_cache_dir}/{config.train_scale}/lm_datasets_validation.arrow", \
-            "test": f"{data_args.dataset_cache_dir}/{config.train_scale}/lm_datasets_test.arrow"},
-        desc=f"Grouping texts in chunks of {config.train_scale}",
+        # batch_size = 100,
+        # num_proc=48,
+        # load_from_cache_file=False,
+        # keep_in_memory=True,
+        # cache_file_names={"train": f"{data_args.dataset_cache_dir}/{config.train_scale}/lm_datasets_train.arrow",\
+        #     "validation": f"{data_args.dataset_cache_dir}/{config.train_scale}/lm_datasets_validation.arrow",}, \
+        # desc=f"Grouping texts in chunks of {config.train_scale}",
     )
 
 
-    # if training_args.local_rank == 0:
-    print(f"rank{training_args.local_rank} loading datasets")
+    if training_args.local_rank == 0:
+        print(f"rank{training_args.local_rank} loading datasets")
 
-    # if training_args.local_rank == 0:
-    print(f"rank{training_args.local_rank} datasets loaded")
+    if training_args.local_rank == 0:
+        print(f"rank{training_args.local_rank} datasets loaded")
 
     train_dataset = lm_datasets["train"]
     valid_dataset = lm_datasets["validation"]
@@ -206,10 +334,10 @@ def train():
     if training_args.local_rank == 0:
         torch.distributed.barrier()
     
-    if training_args.local_rank == 0:
-        print("len(train_dataset):", len(train_dataset))
-        # for index in random.sample(range(len(train_dataset)), 3):
-        #     print(f"Sample {index} of the training set: {train_dataset[index]}.")
+    # if training_args.local_rank == 0:
+    #     print("len(train_dataset):", len(train_dataset))
+    #     for index in random.sample(range(len(train_dataset)), 3):
+    #         print(f"Sample {index} of the training set: {train_dataset[index]}.")
     
     data_collator = default_data_collator # DataCollatorForSupervisedDataset(tokenizer=tokenizer)
 

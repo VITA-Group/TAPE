@@ -23,7 +23,7 @@
     "transformers_version": "4.31.0",
     "use_cache": true,
     "vocab_size": 32000,
-    "rpe_type": "new_rope",
+    "rpe_type": "adape",
     "log_scale": false,
     "train_scale": 1024
   }
