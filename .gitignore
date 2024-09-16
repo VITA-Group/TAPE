@@ -2,6 +2,7 @@
 output/
 wandb/
 script/
+debugpy*
 *.sh
 .vscode/
 __pycache__/

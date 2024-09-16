@@ -27,6 +27,8 @@ import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from transformers.models.llama.modeling_llama import LlamaModel
+from utils.triton_utils import adape_flash_attn_func
+from flash_attn import flash_attn_func
 
 # from ...activations import ACT2FN
 # from ...modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast, SequenceClassifierOutputWithPast
@@ -288,10 +290,12 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
     # (num_heads:8, seq_length:1024, head_dim:96)
     # cos = cos.squeeze(0).transpose(0, 1)  # [seq_len, num_heads,  dim]
     # sin = sin.squeeze(0).transpose(0, 1)
-    cos = cos[:,:,position_ids.squeeze(0),:]  # [bs, num_heads, seq_len, dim] original: [bs, 1, seq_len, dim]
-    sin = sin[:,:,position_ids.squeeze(0),:]  # q: [bs, num_heads, seq_len, dim]; cos: [bs, num_heads, seq_len, dim]
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin) if k is not None else None
+    sel_cos = cos.clone()
+    sel_sin = sin.clone()
+    sel_cos = sel_cos[:,:,position_ids.squeeze(0),:]  # [bs, num_heads, seq_len, dim] original: [bs, 1, seq_len, dim]
+    sel_sin = sel_sin[:,:,position_ids.squeeze(0),:]  # q: [bs, num_heads, seq_len, dim]; cos: [bs, num_heads, seq_len, dim]
+    q_embed = (q * sel_cos) + (rotate_half(q) * sel_sin)
+    k_embed = (k * sel_cos) + (rotate_half(k) * sel_sin) if k is not None else None
     return q_embed, k_embed
 
 class AdaLlamaMLP(nn.Module):
@@ -476,8 +480,12 @@ class PELlamaAttention(nn.Module):
 
         return attn_output, pos_output, attn_weights, past_key_value
 
+from transformers.models.llama.modeling_llama import _get_unpad_data
+from transformers.utils import is_flash_attn_available
+if is_flash_attn_available():
+    # from flash_attn import flash_attn_func, flash_attn_varlen_func
+    from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa
 
-from transformers.models.llama.modeling_llama import pad_input, flash_attn_func, index_first_axis, _get_unpad_data, flash_attn_varlen_func, unpad_input
 class PELlamaFlashAttention2(PELlamaAttention):
     """
     Llama flash attention module. This module inherits from `LlamaAttention` as the weights of the module stays
@@ -530,6 +538,9 @@ class PELlamaFlashAttention2(PELlamaAttention):
         query_states = query_states.transpose(1, 2)
         key_states = key_states.transpose(1, 2)
         value_states = value_states.transpose(1, 2)
+        position_state0 = position_states[0].transpose(1, 2)
+        position_state1 = position_states[1].transpose(1, 2)
+
 
         # TODO: llama does not have dropout in the config??
         # It is recommended to use dropout with FA according to the docs
@@ -553,16 +564,16 @@ class PELlamaFlashAttention2(PELlamaAttention):
             key_states = key_states.to(torch.float16)
             value_states = value_states.to(torch.float16)
 
-        attn_output = self._flash_attention_forward(
-            query_states, key_states, value_states, padding_mask, q_len, dropout=dropout_rate
+        attn_output, pos_output0, pos_output1 = self._adape_flash_attention_forward(
+            query_states, key_states, value_states, position_state0, position_state1, padding_mask, q_len, dropout=dropout_rate
         )
-        pos_output_0 = self._flash_attention_forward(
-            query_states, key_states, position_states[0].transpose(1, 2), padding_mask, q_len, dropout=dropout_rate
-        )
-        pos_output_1 = self._flash_attention_forward(
-            query_states, key_states, position_states[1].transpose(1, 2), padding_mask, q_len, dropout=dropout_rate
-        )
-        pos_output = (pos_output_0.transpose(1, 2).contiguous(), pos_output_1.transpose(1, 2).contiguous())
+        # pos_output_0 = self._flash_attention_forward(
+        #     query_states, key_states, position_states[0].transpose(1, 2), padding_mask, q_len, dropout=dropout_rate
+        # )
+        # pos_output_1 = self._flash_attention_forward(
+        #     query_states, key_states, position_states[1].transpose(1, 2), padding_mask, q_len, dropout=dropout_rate
+        # )
+        pos_output = (pos_output0.transpose(1, 2).contiguous(), pos_output1.transpose(1, 2).contiguous())
 
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
         attn_output = self.o_proj(attn_output)
@@ -572,8 +583,8 @@ class PELlamaFlashAttention2(PELlamaAttention):
 
         return attn_output, pos_output, attn_weights, past_key_value
 
-    def _flash_attention_forward(
-        self, query_states, key_states, value_states, padding_mask, query_length, dropout=0.0, softmax_scale=None
+    def _adape_flash_attention_forward(
+        self, query_states, key_states, value_states, position_state0, position_state1, padding_mask, query_length, dropout=0.0, softmax_scale=None
     ):
         """
         Calls the forward method of Flash Attention - if the input hidden states contain at least one padding token
@@ -595,6 +606,7 @@ class PELlamaFlashAttention2(PELlamaAttention):
                 The scaling of QK^T before applying softmax. Default to 1 / sqrt(head_dim)
         """
         # Contains at least one padding token in the sequence
+        assert padding_mask is None
         if padding_mask is not None:
             batch_size = query_states.shape[0]
             query_states, key_states, value_states, indices_q, cu_seq_lens, max_seq_lens = self._upad_input(
@@ -619,11 +631,20 @@ class PELlamaFlashAttention2(PELlamaAttention):
 
             attn_output = pad_input(attn_output_unpad, indices_q, batch_size, query_length)
         else:
-            attn_output = flash_attn_func(
-                query_states, key_states, value_states, dropout, softmax_scale=softmax_scale, causal=True
-            )
+            if self.config.use_flash_attention_2 == "flash":
+                attn_output = flash_attn_func(query_states, key_states, value_states, dropout, softmax_scale=softmax_scale, causal=True)
+                pos_output0 = flash_attn_func(query_states, key_states, position_state0, dropout, softmax_scale=softmax_scale, causal=True)
+                pos_output1 = flash_attn_func(query_states, key_states, position_state1, dropout, softmax_scale=softmax_scale, causal=True)
+            else:
+                # position_state0 = value_states.clone()
+                # position_state1 = value_states.clone()
+                # v0 = position_state0.clone()
+                # v1 = position_state1.clone()
+                attn_output, pos_output0, pos_output1 = adape_flash_attn_func(
+                    query_states, key_states, value_states, position_state0, position_state1, True, softmax_scale, 
+                )
 
-        return attn_output
+        return attn_output, pos_output0, pos_output1
 
     def _upad_input(self, query_layer, key_layer, value_layer, padding_mask, query_length):
         indices_k, cu_seqlens_k, max_seqlen_in_batch_k = _get_unpad_data(padding_mask)
@@ -705,9 +726,9 @@ class LlamaDecoderLayer(nn.Module):
         self.hidden_size = config.hidden_size
         # self.self_attn = PELlamaAttention(config=config) 
         self.self_attn = (
-            PELlamaFlashAttention2(config=config)
-            if getattr(config, "_attn_implementation", "eager") == "flash_attention_2"
-            else PELlamaAttention(config=config)
+            PELlamaAttention(config=config)
+            if not getattr(config, "use_flash_attention_2", False) or config.use_flash_attention_2 == "none"
+            else PELlamaFlashAttention2(config=config)
         )
         self.mlp = LlamaMLP(config)
         self.pe = PELayer(config)

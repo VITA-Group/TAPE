@@ -136,12 +136,16 @@ def parse_args():
 
 def main():
     args = parse_args()
+    torch_dtype = torch.float16
 
     if args.seed is not None:
         set_seed(args.seed)
 
-    raw_datasets = load_from_disk(args.dataset_cache_dir)
-    raw_datasets = raw_datasets["validation"]
+    
+    raw_datasets = load_dataset("arrow", data_files={'test': f"{args.dataset_cache_dir}/test/data*.arrow"}, streaming=True)
+    # raw_datasets = load_from_disk(args.dataset_cache_dir)
+    raw_datasets = raw_datasets["test"]
+
 
     if args.config_name:
         config = MyLlamaConfig.from_pretrained(args.config_name)
@@ -167,14 +171,14 @@ def main():
     elif config.rpe_type == "bipe_alibi" or config.rpe_type == "alibi":
         LlamaForCausalLM = MyLlamaForCausalLM_bipe_alibi
     elif config.rpe_type == 'adape':
-        from models.llama.add_adape import AdaLlamaForCausalLM
-        LlamaForCausalLM = AdaLlamaForCausalLM
-    elif config.rpe_type== 'ada_rope':
-        from models.llama.ada_rope import MyLlamaForCausalLM
-        LlamaForCausalLM = MyLlamaForCausalLM
-    elif config.rpe_type == 'new_rope':
         from models.llama.new_rope import MyLlamaForCausalLM
         LlamaForCausalLM = MyLlamaForCausalLM
+    # elif config.rpe_type== 'ada_rope':
+    #     from models.llama.ada_rope import MyLlamaForCausalLM
+    #     LlamaForCausalLM = MyLlamaForCausalLM
+    # elif config.rpe_type == 'new_rope':
+    #     from models.llama.new_rope import MyLlamaForCausalLM
+    #     LlamaForCausalLM = MyLlamaForCausalLM
     else:
         raise NotImplementedError
 
@@ -188,6 +192,7 @@ def main():
         from_tf=bool(".ckpt" in args.model_name_or_path),
         config=config,
         low_cpu_mem_usage=args.low_cpu_mem_usage,
+        torch_dtype=torch_dtype
     )
 
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
@@ -198,7 +203,10 @@ def main():
 
     # Preprocessing the datasets.
     # First we tokenize all the texts.
-    column_names = raw_datasets.column_names
+    from utils import infer_columns_of_dataset
+    column_names = infer_columns_of_dataset(raw_datasets)
+    # print(raw_datasets.features)
+
     text_column_name = "text" if "text" in column_names else column_names[0]
 
     def tokenize_function(examples):
@@ -208,11 +216,11 @@ def main():
     tokenized_datasets = raw_datasets.map(
         tokenize_function,
         batched=True,
-        num_proc=args.preprocessing_num_workers,
         remove_columns=column_names,
-        load_from_cache_file=not args.overwrite_cache,
-        cache_file_name=f"{args.dataset_cache_dir}/tokenized/tokenized_datasets_validation.arrow",
-        desc="Running tokenizer on dataset",
+        # num_proc=args.preprocessing_num_workers,
+        # load_from_cache_file=not args.overwrite_cache,
+        # cache_file_name=f"{args.dataset_cache_dir}/tokenized/tokenized_datasets_validation.arrow",
+        # desc="Running tokenizer on dataset",
     )
 
     if args.block_size is None:
@@ -247,10 +255,10 @@ def main():
     lm_datasets = tokenized_datasets.map(
         group_texts,
         batched=True,
-        num_proc=args.preprocessing_num_workers,
-        load_from_cache_file=not args.overwrite_cache,
-        cache_file_name=f"{args.dataset_cache_dir}/{args.block_size}/lm_datasets_validation.arrow",
-        desc=f"Grouping texts in chunks of {block_size}",
+        # num_proc=args.preprocessing_num_workers,
+        # load_from_cache_file=not args.overwrite_cache,
+        # cache_file_name=f"{args.dataset_cache_dir}/{args.block_size}/lm_datasets_validation.arrow",
+        # desc=f"Grouping texts in chunks of {block_size}",
     )
 
     def extract_name(path, type):
@@ -277,7 +285,7 @@ def main():
     )
     model.eval()
     losses = []
-    for step, batch in tqdm(enumerate(eval_dataloader), total=len(eval_dataloader)):
+    for step, batch in tqdm(enumerate(eval_dataloader), leave=False):
         with torch.no_grad():
             # if batch["input_ids"] is None:
             #     continue
@@ -293,7 +301,7 @@ def main():
     except OverflowError:
         perplexity = float("inf")
     
-    csv_file = './assets/new_results.csv'
+    csv_file = './assets/results.csv'
 
     if accelerator.is_main_process:
         import csv

@@ -638,13 +638,13 @@ def init_to_zero(name):
     configs=[
         triton.Config(
             {"BLOCK_M": 128, "BLOCK_N": 128, "SEQUENCE_PARALLEL": False},
-            num_warps=8,
+            num_warps=16,
             num_stages=1,
             pre_hook=init_to_zero("DQ"),
         ),
         triton.Config(
             {"BLOCK_M": 128, "BLOCK_N": 128, "SEQUENCE_PARALLEL": True},
-            num_warps=8,
+            num_warps=16,
             num_stages=1,
             pre_hook=init_to_zero("DQ"),
         ),
@@ -847,7 +847,7 @@ def _flash_attn_forward(q, k, v, bias=None, causal=False, softmax_scale=None):
 
     BLOCK_HEADDIM = max(triton.next_power_of_2(d), 16)
     BLOCK = 128
-    num_warps = 4 if d <= 64 else 8
+    num_warps = 8 if d <= 64 else 16
     grid = lambda META: (triton.cdiv(seqlen_q, META["BLOCK_M"]), batch * nheads)
     _fwd_kernel[grid](
         q,
@@ -886,7 +886,7 @@ def _flash_attn_forward(q, k, v, bias=None, causal=False, softmax_scale=None):
         BLOCK_M=BLOCK,
         BLOCK_N=BLOCK,
         num_warps=num_warps,
-        num_stages=1,
+        num_stages=2,
     )
     return o, lse, softmax_scale  # softmax_scale could have been updated
 
@@ -1136,24 +1136,24 @@ class FlashAttnFunc(torch.autograd.Function):
         assert not ctx.needs_input_grad[3], "FlashAttention does not support bias gradient yet"
         # Triton's autotune causes the Tensor._version to change, and so Pytorch autograd
         # does a memcpy. To avoid this we run in inference_mode, which doesn't track the version.
-        with torch.inference_mode():
-            dq = torch.empty_like(q)
-            dk = torch.empty_like(k)
-            dv = torch.empty_like(v)
-            _flash_attn_backward(
-                do,
-                q,
-                k,
-                v,
-                o,
-                lse,
-                dq,
-                dk,
-                dv,
-                bias=bias,
-                causal=ctx.causal,
-                softmax_scale=ctx.softmax_scale,
-            )
+        # with torch.inference_mode():
+        dq = torch.empty_like(q)
+        dk = torch.empty_like(k)
+        dv = torch.empty_like(v)
+        _flash_attn_backward(
+            do,
+            q,
+            k,
+            v,
+            o,
+            lse,
+            dq,
+            dk,
+            dv,
+            bias=bias,
+            causal=ctx.causal,
+            softmax_scale=ctx.softmax_scale,
+        )
         return dq, dk, dv, None, None, None
 
 

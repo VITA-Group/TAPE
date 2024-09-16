@@ -143,7 +143,7 @@ def train():
         # from transformers.models.llama.modeling_llama import LlamaForCausalLM as MyLlamaForCausalLM
         #! hyperparamter
         config.position_size = 4 * config.num_attention_heads
-        config._attn_implementation = 'flash_attention_2' if training_args.use_flash_attn else 'eager'
+        config.use_flash_attention_2 = 'flash' if training_args.use_flash_attn else 'eager'
         model = MyLlamaForCausalLM.from_pretrained(
             model_args.model_name_or_path,
             config=config,
@@ -205,8 +205,8 @@ def train():
     )
 
     rank = int(os.environ.get('RANK', -1))
-    if rank > 0:
-        barrier(device_ids=[rank])
+    # if rank > 0:
+    #     barrier(device_ids=[rank])
     # data_cache_file = f'./data/RedPajama-Data-1T-Sample/{training_args.model_max_length}/train.arrow'
 
     data_cache_dir = f'../data/tokenized_redpajama/{training_args.model_max_length}'
@@ -219,14 +219,14 @@ def train():
     # dataset = load_dataset("togethercomputer/RedPajama-Data-1T-Sample", cache_dir=training_args.cache_dir)
     # dataset = dataset.map(partial(tokenize_fn, tokenizer), batched=True, num_proc=48, remove_columns=["text", "meta"], cache_file_names={'train': f"{data_cache_dir}/train.arrow"}, load_from_cache_file=True)
 
-    if rank == 0:
-        barrier(device_ids=[0])
+    # if rank == 0:
+    #     barrier(device_ids=[0])
 
-    print(dataset)
+    # print(dataset)
 
     data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
-    if training_args.peft_type == 'lora':
+    if 'lora' in training_args.peft_type:
         targets=["q_proj", "k_proj", "v_proj", "o_proj"]
 
         config = LoraConfig(
@@ -249,7 +249,7 @@ def train():
         # model.model = get_adape_model(model.model, adape_config)
         #? for efficiency
         for n, p in model.named_parameters():
-            if not any([i in n for i in ('pe', 'rotary_emb', 'post_attention_linears')]):
+            if not any([i in n for i in ('pe', 'post_attention_linears')]):
                 p.requires_grad = False
 
         #! might be useful
@@ -259,7 +259,7 @@ def train():
     print(f"Finetuning Model Size={all_parameters/2**30:.2f}B parameters")
     trainable_prameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Trainable Parameter Size={trainable_prameters/2**30:.2f}B parameters")
-    print("Successfully added adapters")
+    print(f"Successfully added {training_args.peft_type} adapters")
 
     model.config.use_cache = False         # required for gradient checkpointing
     model.enable_input_require_grads()     # required for gradient checkpointing

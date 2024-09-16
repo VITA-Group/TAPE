@@ -42,11 +42,7 @@ for i, data in enumerate(data_values):
     ax.legend()
     ax.grid(True)
 
-# 调整子图之间的间距
+# 三连
 plt.tight_layout()
-
-# 保存图像
 plt.savefig('new_results_plot.png', dpi=300, transparent=True)
-
-# 显示图形
 plt.show()

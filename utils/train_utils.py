@@ -9,6 +9,19 @@ from PIL import Image
 from pathlib import Path
 from tqdm import tqdm
 
+def infer_columns_of_dataset(raw_datasets):
+    default_cols = raw_datasets.features
+
+    if default_cols is not None:
+        return list(default_cols)
+
+    first_example = next(iter(raw_datasets))
+    if isinstance(first_example, dict):
+        return list(first_example.keys())
+    else:
+        raise ValueError(f'Unable to infer column names from the data type: {type(first_example)}')
+
+
 def load_image(image_file):
     post_fixs = [".jpg", ".png", ".jpeg", ".gif"]
     if image_file is None:

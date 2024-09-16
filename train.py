@@ -20,7 +20,7 @@ import random
 import os
 from itertools import chain
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Sequence
+from typing import Optional, Union, Dict, Sequence
 
 import torch
 import torch.distributed
@@ -50,6 +50,7 @@ class DataArguments:
 @dataclass
 class TrainingArguments(transformers.TrainingArguments):
     cache_dir: Optional[str] = field(default=None)
+    use_flash_attention_2: Optional[str] = field(default=None)
     optim: str = field(default="adamw_torch")
     model_max_position_embeddings: int = field(
         default=1024,
@@ -106,7 +107,7 @@ def train():
         raise NotImplementedError
 
     if model_args.model_name_or_path:
-        config.use_flash_attention_2 = False
+        config.use_flash_attention_2 = training_args.use_flash_attention_2
         model = LlamaForCausalLM.from_pretrained(
             model_args.model_name_or_path,
             config=config,
@@ -115,7 +116,7 @@ def train():
             n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
             print(f"Finetuning model from {model_args.model_name_or_path} - Model Size={n_params/2**20:.2f}M parameters")
     else:
-        config.use_flash_attention_2 = True
+        config.use_flash_attention_2 = training_args.use_flash_attention_2
         model = LlamaForCausalLM(config)
         n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
         if training_args.local_rank == 0:
@@ -229,7 +230,6 @@ def train():
         column_names = infer_columns_of_dataset(raw_datasets["train"])
     else:
         column_names = infer_columns_of_dataset(raw_datasets["test"])
-    print(column_names)
 
     # column_names = raw_datasets["train"].column_names
     # text_column_name = "text" if "text" in column_names else column_names[0]
@@ -350,6 +350,7 @@ def train():
     trainer = Trainer(model=model, tokenizer=tokenizer, args=training_args, **data_module)
     model.config.use_cache = False
 
+    # torch.autograd.set_detect_anomaly(True)
     if training_args.do_train:
         logging.info("*** Start Training ***")
         trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)

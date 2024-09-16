@@ -26,8 +26,9 @@ import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
-# from flash_attn import flash_attn_func, flash_attn_varlen_func
 from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa
+from utils import flash_attn_func as flash_attn_func2
+from flash_attn import flash_attn_func
 
 
 # from ...activations import ACT2FN
@@ -506,6 +507,7 @@ class LlamaFlashAttention2(LlamaAttention):
             cu_seqlens_q, cu_seqlens_k = cu_seq_lens
             max_seqlen_in_batch_q, max_seqlen_in_batch_k = max_seq_lens
 
+            from flash_attn import flash_attn_varlen_func
             attn_output_unpad = flash_attn_varlen_func(
                 query_states,
                 key_states,
@@ -521,17 +523,20 @@ class LlamaFlashAttention2(LlamaAttention):
 
             attn_output = pad_input(attn_output_unpad, indices_q, batch_size, query_length)
         else:
+            # original input
             # attn_output = flash_attn_func(query_states, key_states, value_states, dropout, softmax_scale=softmax_scale, causal=True)
 
-            from utils import flash_attn_func as flash_attn_func2
+            # from utils import adape_flash_attn_func
+            # v0 = value_states.clone()
+            # v1 = value_states.clone()
+            # attn_output, attn_output0, attn_output1 = adape_flash_attn_func(query_states, key_states, value_states, v0, v1, True, softmax_scale)
+            # assert torch.allclose(attn_output, attn_output0)
             attn_output = flash_attn_func2(query_states, key_states, value_states, True, softmax_scale)
-            # diff = torch.max(torch.abs(attn_output - org_attn_output))
-            # print("triton diff", diff)
-            # print("=" * 80)
-            # exit(-1)
+
         return attn_output
 
     def _upad_input(self, query_layer, key_layer, value_layer, padding_mask, query_length):
+        from transformers.models.llama.modeling_llama import _get_unpad_data
         indices_k, cu_seqlens_k, max_seqlen_in_batch_k = _get_unpad_data(padding_mask)
         batch_size, kv_seq_len, num_key_value_heads, head_dim = key_layer.shape
 
@@ -576,7 +581,7 @@ class LlamaDecoderLayer(nn.Module):
         self.hidden_size = config.hidden_size
         self.self_attn = (
             LlamaAttention(config=config)
-            if not getattr(config, "use_flash_attention_2", False)
+            if not getattr(config, "use_flash_attention_2", False) or config.use_flash_attention_2 == 'none'
             else LlamaFlashAttention2(config=config)
         )
         self.mlp = LlamaMLP(config)
