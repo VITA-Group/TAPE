@@ -141,7 +141,6 @@ def main():
     if args.seed is not None:
         set_seed(args.seed)
 
-    
     raw_datasets = load_dataset("arrow", data_files={'test': f"{args.dataset_cache_dir}/test/data*.arrow"}, streaming=True)
     # raw_datasets = load_from_disk(args.dataset_cache_dir)
     raw_datasets = raw_datasets["test"]

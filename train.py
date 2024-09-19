@@ -27,7 +27,7 @@ import torch.distributed
 import transformers
 import deepspeed
 from config_llama import MyLlamaConfig
-from torch.utils.data import Dataset
+# from torch.utils.data import Dataset
 from transformers import Trainer, AutoConfig, default_data_collator, AutoTokenizer
 from datasets import load_dataset, load_from_disk
 

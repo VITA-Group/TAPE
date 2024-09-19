@@ -4,39 +4,64 @@ Adaptive Positional Encoding for Better Length Extrapolation (WIP)
 
 ## Setup Environment
 ```shell
-conda create -n bipe python=3.10
-conda activate bipe
-pip3 install -r requirements.txt
+conda create -n adape python=3.10
+conda activate adape
+pip install -r requirements.txt
+pip install flash-attn --no-build-isolation
 ```
-## Data for Finetuning
-We use ScienceQA for downstream finetuning and evaluation.
+## Data
+We use c4.en for pretraining and RedPajama-Data-1T-Sample for finetuning.
 
+*Pretraining Data*
+```shell
+GIT_LFS_SKIP_SMUDGE=1 git clone https://huggingface.co/datasets/allenai/c4
+cd c4
+git lfs pull --include "en/*"
+```
+or (not tested)
+```python
+from datasets import load_dataset
+en = load_dataset("allenai/c4", "en")
+```
+*Finetuning Data*
 
-## Finetuning
+This [line of code](https://github.com/zhuconv/AdaPE/blob/main/train_longlora.py#L214) will directly load data from hugginface hub or local cache dir.
+
 
 
 ## Pretraining
-The scripts under script/ covers the commands for training and perpleixity evaluation.   
+For pretraining, please download c4.en dataset
 
-For training, the key modifications for BiPE are getting token ids (intra-segment) and position ids (inter-segment) by the `get_bilevel_ids` function. Then, the token ids are used to get absolute positional encodings (`get_ape_embeddings`) and the position ids are used to get relative positional encodings. For example, you can start training 151M BiPE-RoPE model with the following command:
+The scripts under script/ covers the commands for training and perpleixity evaluation.  For example, you can start training 151M BiPE-RoPE model with the following command:
+
 ```shell
-cd BiPE
-OUTPUT_DIR=./output  # path to save checkpoints and tensorboard
-DATA_DIR=./data  # path to load data
-CONFIG_NAME=config/bipe_rope.json
+OUTPUT_DIR=./output/adape  # path to save checkpoints and tensorboard
+CONFIG_NAME=config/adarope.json
 bash script/train.sh
 ```
-You can change CONFIG_NAME to choose different positional encoding variants. (`choose from [config/bipe_rope.json, config/bipe_alibi.json, config/rope.json, config/alibi.json`)
+You can change CONFIG_NAME to choose different positional encoding variants. (`choose from [config/adarope.json, config/alibi.json`)
 
-## Perplexity Evaluation
-For perplexity evaluation, you can use the following command:
+## Evaluation
+For pretraining perplexity evaluation, you need to prepare `monology/pile-test-val` using `download_data.py`. Then you can use the following command:
 ```shell
-cd BiPE;
-DATA_DIR=./data  # path to load data
-MODEL=./bipe_rope # model checkpoint path
+DATA_DIR=../data/pile  # path to load data
+MODEL=./output/adape # model checkpoint path
 bash script/eval.sh
 ```
 
+For finetuning perplexity evaluation, you need to manually download data hosted by [LongLoRA](https://github.com/dvlab-research/LongLoRA/tree/main)
+
+| Dataset    | Split      | Link                                                                                                         |
+|:-----------|------------|--------------------------------------------------------------------------------------------------------------|
+| PG19       | test       | [pg19/test.bin](https://drive.google.com/file/d/1QANDMdctpacPAYgS04adDXqByGEq-Ret/view?usp=share_link)       |
+| Proof-pile | test       | [proof-pile/test_sampled_data.bin](https://drive.google.com/file/d/1bUI5lPDvrqzY_XXJJ2sSuvZx0Y9AZClE/view?usp=share_link)         |
+ 
+ Then you can use the following command:
+```shell
+data=proof_pile  # path to load data
+model_name=./output/llama_adape # model checkpoint path
+bash script/long_eval.sh
+```
 
 ## Credits
 The codebase are inherited from [BiPE](https://github.com/zhenyuhe00/BiPE). Thanks to their excellent work!
