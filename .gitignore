@@ -5,7 +5,7 @@ debugpy*
 data/
 *mllava*
 templates
-*.sh
+/*.sh
 .vscode/
 __pycache__/
 *.py[cod]
