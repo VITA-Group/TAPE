@@ -21,7 +21,7 @@ command=""
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 echo "Running experiment of method $TYPE"
 echo "The path to Python is: $(which python)"
-echo "Command is $command"
+# echo "Command is $command"
 srun torchrun --nproc_per_node $NGPUS --nnodes $NNODES \
         --rdzv_endpoint $head_node_ip:29500 \
         --rdzv_id $RANDOM \

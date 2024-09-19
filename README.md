@@ -39,7 +39,15 @@ OUTPUT_DIR=./output/adape  # path to save checkpoints and tensorboard
 CONFIG_NAME=config/adarope.json
 bash script/train.sh
 ```
-You can change CONFIG_NAME to choose different positional encoding variants. (`choose from [config/adarope.json, config/alibi.json`)
+You can change CONFIG_NAME to choose different positional encoding variants. (`choose from [config/adape.json, config/alibi.json, config/rope.json`)
+
+## Finetuning
+Similiar to pretrainng, you can use the following command: 
+```shell
+TYPE=adape
+bash script/long_train.sh
+```
+You can change TYPE to choose different positional encoding variants. (`choose from [adape, alibi, rope]`)
 
 ## Evaluation
 For pretraining perplexity evaluation, you need to prepare `monology/pile-test-val` using `download_data.py`. Then you can use the following command:
