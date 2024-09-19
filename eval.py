@@ -171,7 +171,7 @@ def main():
     elif config.rpe_type == "bipe_alibi" or config.rpe_type == "alibi":
         LlamaForCausalLM = MyLlamaForCausalLM_bipe_alibi
     elif config.rpe_type == 'adape':
-        from models.llama.new_rope import MyLlamaForCausalLM
+        from models.llama.adarope import MyLlamaForCausalLM
         LlamaForCausalLM = MyLlamaForCausalLM
     # elif config.rpe_type== 'ada_rope':
     #     from models.llama.ada_rope import MyLlamaForCausalLM

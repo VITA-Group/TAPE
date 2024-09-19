@@ -215,7 +215,7 @@ def run_eval(args: EvalArguments):
     # Load model and tokenizer
     # Load model and tokenizer
     if "adape" in args.base_model:
-        from models.llama.new_rope import MyLlamaForCausalLM
+        from models.llama.adarope import MyLlamaForCausalLM
         # use_flash_attn = True if "flash" in args.base_model else False
         # config._attn_implementation = 'flash_attention_2' if use_flash_attn else 'eager'
         model = MyLlamaForCausalLM.from_pretrained(args.base_model,
@@ -265,8 +265,22 @@ def run_eval(args: EvalArguments):
 
     eval_metric = EvalMetricImpl(vocab_size=config.vocab_size, gpu_id=gpu_id)
     result = evaluator.evaluate(dataset, eval_metric)
+    csv_file = './assets/tune_results.csv'
+    data_name = 'Proof-pile' if 'proof_pile' in args.data_path else 'PG19' if 'pg19' in args.data_path else 'NA'
+    model_name = args.base_model.split('/')[-1] 
     if evaluator.is_first_device():
         print(result)
+        import csv
+        # 检查文件是否存在，如果不存在则写入标题行
+        if not os.path.isfile(csv_file):
+            with open(csv_file, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([ 'data', 'model', 'length' ] + list(result.keys()))
+
+        # 写入数据行
+        with open(csv_file, 'a+', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([ data_name, model_name, args.seq_len ] + list(result.values()))
 
 
 def ddp_setup():

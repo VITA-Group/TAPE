@@ -1,8 +1,10 @@
 # Byte-compiled / optimized / DLL files
 output/
 wandb/
-script/
 debugpy*
+data/
+*mllava*
+templates
 *.sh
 .vscode/
 __pycache__/

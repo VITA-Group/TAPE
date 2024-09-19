@@ -139,7 +139,7 @@ def train():
 
     # Load model and tokenizer
     if training_args.peft_type == 'adape':
-        from models.llama.new_rope import MyLlamaForCausalLM
+        from models.llama.adarope import MyLlamaForCausalLM
         # from transformers.models.llama.modeling_llama import LlamaForCausalLM as MyLlamaForCausalLM
         #! hyperparamter
         config.position_size = 4 * config.num_attention_heads
@@ -242,17 +242,11 @@ def train():
         [p.requires_grad_() for n, p in model.named_parameters() if any([k in n for k in training_args.trainable_params.split(",")])]
     
     elif training_args.peft_type == 'adape':
-        # adape_config = AdaPEConfig(
-        #     position_size=32,
-        # )
-        # # model.enable_input_require_grads()
-        # model.model = get_adape_model(model.model, adape_config)
-        #? for efficiency
         for n, p in model.named_parameters():
             if not any([i in n for i in ('pe', 'post_attention_linears')]):
                 p.requires_grad = False
 
-        #! might be useful
+        # same setting as lora and longlora
         [p.requires_grad_() for n, p in model.named_parameters() if any([k in n for k in training_args.trainable_params.split(",")])]
 
     all_parameters = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())

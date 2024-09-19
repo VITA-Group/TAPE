@@ -101,7 +101,7 @@ def train():
     #     from models.llama.add_adape import AdaLlamaForCausalLM
     #     LlamaForCausalLM = AdaLlamaForCausalLM
     elif config.rpe_type == "adape":
-        from models.llama.new_rope import MyLlamaForCausalLM
+        from models.llama.adarope import MyLlamaForCausalLM
         LlamaForCausalLM = MyLlamaForCausalLM
     else:
         raise NotImplementedError
@@ -145,9 +145,9 @@ def train():
         test_split_percentage = 0.03
         def uniform_sample_list(file_list, subsample_rate):
             if not 0 < subsample_rate <= 1:
-                raise ValueError(f'subsample_rate 应该是 (0, 1] 之间的浮点数，但得到了 {subsample_rate}')
+                raise ValueError(f'subsample_rate wrong: {subsample_rate}')
     
-            sample_size = int(len(file_list) * subsample_rate)  # 计算采样数量
+            sample_size = int(len(file_list) * subsample_rate)
             return random.sample(file_list, sample_size)
         def print_rank_0(*msg):
             local_rank = int(os.getenv("LOCAL_RANK", "0"))
