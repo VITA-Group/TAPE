@@ -25,14 +25,14 @@ from typing import Optional, Union, Dict, Sequence
 import torch
 import torch.distributed
 import transformers
-import deepspeed
+# import deepspeed
 from config_llama import MyLlamaConfig
 # from torch.utils.data import Dataset
 from transformers import Trainer, AutoConfig, default_data_collator, AutoTokenizer
 from datasets import load_dataset, load_from_disk
 
-from models.llama.bipe_rope import MyLlamaForCausalLM as MyLlamaForCausalLM_bipe_rope
-from models.llama.bipe_alibi import MyLlamaForCausalLM as MyLlamaForCausalLM_bipe_alibi
+# from models.llama.bipe_rope import MyLlamaForCausalLM as MyLlamaForCausalLM_bipe_rope
+# from models.llama.bipe_alibi import MyLlamaForCausalLM as MyLlamaForCausalLM_bipe_alibi
 
 transformers.logging.set_verbosity_info()
 
@@ -103,6 +103,9 @@ def train():
     elif config.rpe_type == "adape":
         from models.llama.adarope import MyLlamaForCausalLM
         LlamaForCausalLM = MyLlamaForCausalLM
+    elif config.rpe_type == "yarn":
+        from models.llama.yarn import YarnLlamaForCausalLM
+        LlamaForCausalLM = YarnLlamaForCausalLM
     else:
         raise NotImplementedError
 
@@ -210,7 +213,8 @@ def train():
     
         return raw_datasets
     
-    raw_datasets = load_json_dataset("/scratch/gpfs/DATASETS/hugging_face/c4/en")
+    raw_datasets = load_dataset("allenai/c4", "en", streaming=True)
+    # raw_datasets = load_json_dataset("/scratch/gpfs/DATASETS/hugging_face/c4/en")
     # raw_datasets = load_dataset("/scratch/gpfs/DATASETS/hugging_face/c4/en", split={"train": "train[:10%]", "validation": "validation"}, chunksize=10<<23)
     # raw_datasets = load_dataset("/scratch/gpfs/DATASETS/hugging_face/c4/en", split={"train": "train[:10%]", "validation": "validation"}, streaming=True)
 
@@ -328,7 +332,7 @@ def train():
 
     train_dataset = lm_datasets["train"]
     valid_dataset = lm_datasets["validation"]
-    test_dataset = lm_datasets["test"]
+    # test_dataset = lm_datasets["test"]
 
 
     if training_args.local_rank == 0:
