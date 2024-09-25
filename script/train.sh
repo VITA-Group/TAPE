@@ -32,7 +32,7 @@ $command --nproc_per_node $NGPUS --nnodes $NNODES \
         --dataset_cache_dir ../data/c4 \
         --output_dir "output/${TYPE}_c4" \
         --config_name "config/${TYPE}.json" \
-        --resume_from_checkpoint true \
+        --resume_from_checkpoint false \
         --max_steps $max_steps \
         --warmup_ratio 0.02 \
         --lr_scheduler_type polynomial \
