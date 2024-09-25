@@ -31,6 +31,7 @@ from utils.triton_utils import adape_flash_attn_func
 from utils.triton_utils import flash_attn_func as flash_attn_func2
 from flash_attn import flash_attn_func
 
+from torch.distributions.gamma import Gamma
 # from ...activations import ACT2FN
 # from ...modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast, SequenceClassifierOutputWithPast
 # from ...modeling_utils import PreTrainedModel
@@ -67,6 +68,167 @@ def _make_causal_mask(
     if past_key_values_length > 0:
         mask = torch.cat([torch.zeros(tgt_len, past_key_values_length, dtype=dtype, device=device), mask], dim=-1)
     return mask[None, None, :, :].expand(bsz, 1, tgt_len, tgt_len + past_key_values_length)
+
+
+def rbf(X, P):
+    """
+    :param X: Input data matrix, shape: (N, d)
+    :param P: Number of samples we draw to approximate the kernel.
+    :return: Randomized binning feature map matrix Z, shape: (N, \sum_{i=1}^P M_i), where M_i is the number of unique
+    bin indices in the ith iteration. Each row of Z corresponds to a randomized binning feature map for a data point in
+    X.
+
+    """
+    N, d = X.shape
+    indices = np.zeros((N, d))  # Matrix that stores bin indices for all training data point
+    gamma_dist = Gamma(a=0)  # The lower bound of the support of the distribution is 0, i.e., a, is set to 0
+    Z = []
+
+    for p in range(P):
+        delta = gamma_dist.rvs(size=d)  # Sample d delta from this distribution
+        u = np.random.uniform(0, delta, size=d)
+
+        for i in range(N):
+            indices[i, :] = bin_index(X[i, :], delta, u)
+
+        unique_indices = np.unique(indices, axis=0)  # Eliminates unoccupied bins from the representation
+        length = unique_indices.shape[0]
+        idx_to_pos = {tuple(idx): pos for pos, idx in
+                      enumerate(unique_indices)}  # Numpy array, i.e., idx, is not hashable
+        one_hot_vectors = np.zeros((N, length), dtype=int)  # Each row corresponds to a z_p(x) for a specific x
+        for i in range(N):
+            one_hot_vectors[i, idx_to_pos[tuple(indices[i, :])]] = 1
+
+        Z.append(one_hot_vectors)
+
+    return np.hstack(Z) / np.sqrt(P)
+
+def scale_embedding(embedding, gamma):
+    """
+    :param embedding: The already computed embedding (N, d), where N is the number of samples and d is the embedding dimension.
+    :param gamma: The desired gamma value for the Laplacian kernel.
+    :return: Scaled embedding to correspond to the Laplacian kernel with the given gamma.
+    """
+    return embedding * torch.sqrt(torch.tensor([gamma], dtype=torch.float32))
+
+def rbf_sparse(X, P=100, device=None):
+    """
+    :param X: Input data matrix, shape: (N, d)
+    :param P: Number of samples we draw to approximate the kernel.
+    :param device: Device to perform computations on ('cpu' or 'cuda')
+    :return: Randomized binning feature map matrix Z as a sparse tensor, shape: (N, sum of unique bins across P iterations)
+    """
+    # Move input data to the specified device and ensure dtype consistency
+    X = X.to(device)
+    N, d = X.shape
+
+    # Define the Gamma distribution on the specified device with appropriate dtype
+    gamma_dist = torch.distributions.Gamma(
+        concentration=torch.tensor(2.0, device=device, dtype=X.dtype),
+        rate=torch.tensor(1.0, device=device, dtype=X.dtype)
+    )
+
+    indices_list = []
+    values_list = []
+    total_cols = 0  # Total number of columns in Z
+
+    for p in range(P):
+        # Sample delta from the Gamma distribution
+        delta = gamma_dist.sample((d,))  # Shape: (d,)
+
+        # Generate shift parameters u with appropriate dtype
+        u = torch.rand(d, device=device, dtype=X.dtype) * delta  # Shape: (d,)
+
+        # Compute bin indices for all data points
+        indices_p = torch.ceil((X - u) / delta).long()  # Shape: (N, d)
+
+        # Find unique indices and inverse mapping
+        unique_indices, inverse_indices = torch.unique(
+            indices_p, dim=0, return_inverse=True
+        )
+        length_p = unique_indices.shape[0]
+
+        # For each data point i, non-zero at position (i, inverse_indices[i])
+        # Adjust column indices by total_cols
+        rows = torch.arange(N, device=device)
+        cols = inverse_indices + total_cols  # Shift column indices
+        indices = torch.stack([rows, cols], dim=0)  # Shape: (2, N)
+
+        values = torch.ones(N, dtype=X.dtype, device=device)
+
+        indices_list.append(indices)
+        values_list.append(values)
+        total_cols += length_p  # Update total number of columns
+
+    # Concatenate indices and values from all P iterations
+    indices_all = torch.cat(indices_list, dim=1)  # Shape: (2, total_nnz)
+    values_all = torch.cat(values_list)  # Shape: (total_nnz,)
+
+    # Define the size of Z
+    size = (N, total_cols)
+
+    # Create sparse tensor Z
+    Z = torch.sparse_coo_tensor(indices_all, values_all, size, dtype=X.dtype, device=device)
+
+    # Normalize Z
+    Z = Z / torch.sqrt(torch.tensor(P, dtype=X.dtype, device=device))
+
+    return Z
+
+
+
+def rbf_torch(X, P=1, device=None):
+    """
+    :param X: Input data matrix, shape: (N, d)
+    :param P: Number of samples we draw to approximate the kernel.
+    :param device: Device to perform computations on ('cpu' or 'cuda')
+    :return: Randomized binning feature map matrix Z, shape: (N, sum of unique bins across P iterations)
+    """
+    # Move input data to the specified device and ensure dtype consistency
+    X = X.to(device)
+    N, d = X.shape
+
+    # Define the Gamma distribution on the specified device with appropriate dtype
+    gamma_dist = torch.distributions.Gamma(
+        concentration=torch.tensor(2.0, device=device, dtype=X.dtype),
+        rate=torch.tensor(1.0, device=device, dtype=X.dtype)
+    )
+    Z = []
+
+    for p in range(P):
+        # Sample delta from the Gamma distribution
+        delta = gamma_dist.sample((d,))  # Shape: (d,)
+
+        # Generate shift parameters u with appropriate dtype
+        u = torch.rand(d, device=device, dtype=X.dtype) * delta  # Shape: (d,)
+
+        # Compute bin indices for all data points
+        indices = torch.ceil((X - u) / delta).long()  # Shape: (N, d)
+
+        # Find unique indices and inverse mapping
+        unique_indices, inverse_indices = torch.unique(
+            indices, dim=0, return_inverse=True
+        )
+        length = unique_indices.shape[0]
+
+        # Create one-hot vectors on the specified device with appropriate dtype
+        one_hot_vectors = torch.zeros(
+            (N, length), dtype=X.dtype, device=device
+        )
+        one_hot_vectors[
+            torch.arange(N, device=device), inverse_indices
+        ] = 1
+
+        Z.append(one_hot_vectors)
+
+    # Concatenate and normalize the feature maps with appropriate dtype
+    Z = torch.hstack(Z) / torch.sqrt(torch.tensor(P, dtype=X.dtype, device=device))
+    return Z
+
+
+def bin_index_torch(x, delta, u):
+    """Helper function to compute bin indices for PyTorch tensors."""
+    return torch.floor((x - u) / delta).long()
 
 
 # Copied from transformers.models.bart.modeling_bart._expand_mask
@@ -370,11 +532,6 @@ class PELlamaAttention(nn.Module):
         # assert self.rpe_type in ["bipe_rope", "rope"]
         # self._init_rope()
 
-    # def _init_rope(self):
-    #     if self.config.rope_scaling is None:
-    #         self.rotary_emb = LlamaRotaryEmbedding(self.head_dim, max_position_embeddings=self.max_position_embeddings)
-    #     else:
-    #         raise NotImplementedError
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
@@ -437,16 +594,23 @@ class PELlamaAttention(nn.Module):
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, position_states[0], position_states[1], position_ids)
+        # query_states, key_states = apply_rotary_pos_emb(query_states, key_states, position_states[0], position_states[1], position_ids)
 
 
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+        pos_weights = torch.matmul(position_states, position_states.transpose(2, 3))
 
         if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
             raise ValueError(
                 f"Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
                 f" {attn_weights.size()}"
             )
+        # if kv_seq_len > self.max_position_embeddings:
+        # (1, num_heads, seq_len, hidden_pos_dim)
+            # self.max_position_embeddings = kv_seq_len
+            # self.alibi = 
+        attn_weights = attn_weights + torch.log(pos_weights) 
+        # pos_weights: (1, num_heads, seq_len, seq_len)
 
         if attention_mask is not None:
             if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
@@ -456,11 +620,14 @@ class PELlamaAttention(nn.Module):
             attn_weights = attn_weights + attention_mask
 
         # upcast attention to fp32
-        # (bsz, num_head, q_len, kv_seq_len):
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-        attn_output = torch.matmul(attn_weights, value_states)
-        pos_output = (torch.matmul(attn_weights, position_states[0]), torch.matmul(attn_weights, position_states[1]))
+        # attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        # attn_weights_exp = torch.exp(attn_weights.to(torch.float32))
+        # numerator = pos_weights.to(torch.float32) * attn_weights_exp
+        # denominator = torch.sum(numerator, dim=-1, keepdim=True)
+        # attn_weights = (numerator / denominator).to(query_states.dtype)
 
+        attn_output = torch.matmul(attn_weights, value_states)
+        pos_output = torch.matmul(attn_weights, position_states)
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
             raise ValueError(
@@ -713,15 +880,9 @@ class PELayer(nn.Module):
         # e: (batch_size, num_heads, seq_len, heads_dim)
         bsz, q_len, *_ = x.shape
         # up_e: (batch_size, hidden_size, seq_len, heads_dim)
-        up_e = tuple(
-            torch.einsum('bqnd,eq->bend', i, self.up_proj.weight) for i in e
-        )
-        x_e = tuple(
-             self.act_fn(self.x_proj(x).transpose(1, 2).unsqueeze(-1)) * i for i in up_e
-        )
-        down_e = tuple(
-            torch.einsum('bend,qe->bqnd', i, self.down_proj.weight) for i in x_e
-        )
+        up_e = torch.einsum('bqnd,eq->bend', e, self.up_proj.weight)
+        x_e = self.act_fn(self.x_proj(x).transpose(1, 2).unsqueeze(-1)) * up_e
+        down_e = torch.einsum('bend,qe->bqnd', x_e, self.down_proj.weight)
         # down_e = torch.matmul(prime, e[0]), torch.matmul(prime, e[1])
         # down_e =  ( prime * e[0], prime * e[1] )
         return down_e
@@ -729,17 +890,17 @@ class PELayer(nn.Module):
 def add_tuples(tuple1, tuple2):
     return tuple(a + b for a, b in zip(tuple1, tuple2))
 
-from transformers.models.llama.modeling_llama import LlamaDecoderLayer
+# from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 class LlamaDecoderLayer(nn.Module):
     def __init__(self, config: LlamaConfig):
         super().__init__()
         self.hidden_size = config.hidden_size
-        # self.self_attn = PELlamaAttention(config=config) 
-        self.self_attn = (
-            PELlamaAttention(config=config)
-            if not getattr(config, "use_flash_attention_2", False) or config.use_flash_attention_2 == "none"
-            else PELlamaFlashAttention2(config=config)
-        )
+        self.self_attn = PELlamaAttention(config=config) 
+        # self.self_attn = (
+        #     PELlamaAttention(config=config)
+        #     if not getattr(config, "use_flash_attention_2", False) or config.use_flash_attention_2 == "none"
+        #     else PELlamaFlashAttention2(config=config)
+        # )
         self.mlp = LlamaMLP(config)
         self.pe = PELayer(config)
         # self.post_attention_linears = nn.ModuleList(
@@ -795,11 +956,9 @@ class LlamaDecoderLayer(nn.Module):
         )
         hidden_states = residual + hidden_states
         # postition_state: [bs, num_attention_heads, seq_len, head_size]
-        position_states = tuple(
-            torch.einsum('bqnd,qe->bqnd', position_states[idx], self.post_attention_linear.weight)
-            for idx in range(2)
-        )
-        position_states = add_tuples(position_states, pos_residual)
+        position_states = torch.einsum('bqnd,qe->bqnd', position_states, self.post_attention_linear.weight)
+            
+        position_states = position_states + pos_residual
 
         # Fully Connected
         residual = hidden_states
@@ -810,7 +969,7 @@ class LlamaDecoderLayer(nn.Module):
         position_states = self.pe(hidden_states, position_states)
         # position_states = (self.bn1(position_states[0]), self.bn2(position_states[1]))
         hidden_states = residual + hidden_states
-        position_states = add_tuples(position_states, pos_residual)
+        position_states = position_states + pos_residual
 
         outputs = (hidden_states, position_states)
 
@@ -940,6 +1099,42 @@ LLAMA_INPUTS_DOCSTRING = r"""
             Whether or not to return a [`~utils.ModelOutput`] instead of a plain tuple.
 """
 
+def get_slopes(n):
+    def get_slopes_power_of_2(n):
+        # start is 2^(-8/n)
+        start = (2**(-2**-(math.log2(n)-3)))
+        ratio = start
+        return [start*ratio**i for i in range(n)]
+
+    if math.log2(n).is_integer():
+        return get_slopes_power_of_2(n)                   
+    else:                                                 
+        closest_power_of_2 = 2**math.floor(math.log2(n)) 
+        return get_slopes_power_of_2(closest_power_of_2) + get_slopes(2*closest_power_of_2)[0::2][:n-closest_power_of_2]
+
+class AdaAlibiEmbedding(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.num_heads = config.num_attention_heads
+        self.max_position_embeddings = config.max_position_embeddings
+
+    def forward(self, x, seq_len=None):
+        # 根据 inv_freq 计算 cos 和 sin
+        dtype = x.dtype
+        t = torch.arange(seq_len, device=x.device, dtype=dtype).reshape(-1, 1)
+        random_emb = rbf_torch(t, device=x.device) # (seq_len, hidden_dim)
+        # print(random_emb.shape[1], 'shape')
+        slopes = torch.tensor(get_slopes(self.num_heads), device=x.device, dtype=dtype)
+
+        sqrt_slopes = torch.sqrt(torch.exp(slopes)).view(self.num_heads, 1, 1) 
+        # (1, attn_heads, seq_len, hidden_dim)
+        alibi_emb = ( sqrt_slopes * random_emb.unsqueeze(0) ).unsqueeze(0)
+
+        # x: [bs, num_attention_heads, seq_len, head_size]
+        # alibi_emb: [1, num_heads, seq_len, hidden_size]
+        # alibi_emb = alibi_emb.to(dtype=x.dtype)
+        return alibi_emb
+
 
 @add_start_docstrings(
     "The bare LLaMA Model outputting raw hidden-states without any specific head on top.",
@@ -959,9 +1154,11 @@ class LlamaModel(LlamaPreTrainedModel):
         self.vocab_size = config.vocab_size
 
         #! here becomes the model-level init
-        factor = config.rope_scaling['factor'] if config.rope_scaling else 1
-        rope_theta = config.rope_theta if hasattr(config, "rope_theta") else 10000
-        self.rotary_emb = AdaRotaryEmbedding(config.hidden_size // config.num_attention_heads, config.num_attention_heads, max_position_embeddings=config.max_position_embeddings, base=rope_theta, scaling_factor=factor)
+        # factor = config.rope_scaling['factor'] if config.rope_scaling else 1
+        # rope_theta = config.rope_theta if hasattr(config, "rope_theta") else 10000
+        self.alibi = AdaAlibiEmbedding(config)
+
+        # AdaRotaryEmbedding(config.hidden_size // config.num_attention_heads, config.num_attention_heads, max_position_embeddings=config.max_position_embeddings, base=rope_theta, scaling_factor=factor)
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
         self.layers = nn.ModuleList([LlamaDecoderLayer(config) for _ in range(config.num_hidden_layers)])
@@ -1252,8 +1449,8 @@ class LlamaModel(LlamaPreTrainedModel):
         )
 
         hidden_states = inputs_embeds
-        # cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
-        position_states = self.rotary_emb(hidden_states, seq_len=seq_length)
+        # position_states: (1, num_heads, seq_len, hidden_pos_dim)
+        position_states = self.alibi(hidden_states, seq_len=seq_length)
 
         if self.gradient_checkpointing and self.training:
             if use_cache:

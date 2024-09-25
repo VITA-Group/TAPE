@@ -1,5 +1,5 @@
 <h1 align="center">
-Adaptive Positional Encoding for Better Length Extrapolation (WIP)
+Adaptive Equivariant Positional Encoding for Better Length Extrapolation (WIP)
 </h1>
 
 ## Setup Environment
@@ -25,7 +25,7 @@ en = load_dataset("allenai/c4", "en")
 ```
 *Finetuning Data*
 
-This [line of code](https://github.com/zhuconv/AdaPE/blob/main/train_longlora.py#L214) will directly load data from hugginface hub or local cache dir.
+This [line of code](https://github.com/zhuconv/AdaPE/blob/main/train_longlora.py#L214) will directly load RedPajama-Data-1T-Sample data from hugginface hub or local cache dir.
 
 
 
@@ -72,4 +72,4 @@ bash script/long_eval.sh
 ```
 
 ## Credits
-The codebase are inherited from [BiPE](https://github.com/zhenyuhe00/BiPE). Thanks to their excellent work!
+The codebase are inherited from [BiPE](https://github.com/zhenyuhe00/BiPE) and [LongLoRA](https://github.com/dvlab-research/LongLoRA/tree/main). Thanks to their excellent work!

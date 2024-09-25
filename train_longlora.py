@@ -161,6 +161,15 @@ def train():
             cache_dir=training_args.cache_dir,
             torch_dtype=torch.bfloat16,
         )
+    elif training_args.peft_type == 'thetalora':
+        config.rope_theta = 1_000_000
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_args.model_name_or_path,
+            config=config,
+            use_flash_attention_2=True,
+            cache_dir=training_args.cache_dir,
+            torch_dtype=torch.bfloat16,
+        ) 
     elif training_args.peft_type == 'lora':
         model = transformers.AutoModelForCausalLM.from_pretrained(
             model_args.model_name_or_path,

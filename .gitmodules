@@ -1,0 +1,3 @@
+[submodule "arithmetic"]
+	path = arithmetic
+	url = https://github.com/zhuconv/arithmetic.git

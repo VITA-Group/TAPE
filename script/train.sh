@@ -20,6 +20,7 @@ fi
 # [ -z "${DATA_DIR}" ] && DATA_DIR=  # path to load data
 # [ -z "${CONFIG_NAME}" ] && CONFIG_NAME=config/${TYPE}.json # choose from [config/bipe_rope.json, config/bipe_alibi.json, config/rope.json, config/alibi.json]
 
+max_steps=$((50000 / NNODES))
 $command --nproc_per_node $NGPUS --nnodes $NNODES \
         --rdzv_endpoint $head_node_ip:29512 \
         --rdzv_id $RANDOM \
@@ -29,22 +30,22 @@ $command --nproc_per_node $NGPUS --nnodes $NNODES \
         --deepspeed "config/ds_configs/stage2.json" \
         --ddp_timeout 18000 \
         --dataset_cache_dir ../data/c4 \
-        --output_dir "output/${TYPE}_c4_new" \
+        --output_dir "output/${TYPE}_c4" \
         --config_name "config/${TYPE}.json" \
-        --resume_from_checkpoint false \
-        --max_steps 50000 \
-        --warmup_steps 1000 \
+        --resume_from_checkpoint true \
+        --max_steps $max_steps \
+        --warmup_ratio 0.02 \
         --lr_scheduler_type polynomial \
-        --save_steps 1000 \
+        --save_steps 100 \
         --save_total_limit 1 \
-        --eval_steps 1000 \
+        --eval_steps 100 \
         --logging_steps 50 \
         --weight_decay 0.01 \
         --learning_rate 1e-4 \
         --model_max_position_embeddings 1024 \
-        --per_device_train_batch_size 32 \
-        --per_device_eval_batch_size 32 \
-        --gradient_accumulation_steps 4 \
+        --per_device_train_batch_size 8 \
+        --per_device_eval_batch_size 8 \
+        --gradient_accumulation_steps 16 \
         --do_train True \
         --do_eval True \
         --do_predict True \

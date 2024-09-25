@@ -214,6 +214,9 @@ def run_eval(args: EvalArguments):
 
     # Load model and tokenizer
     # Load model and tokenizer
+    if 'theta' in args.base_model:
+        config.rope_theta = 1_000_000
+
     if "adape" in args.base_model:
         from models.llama.adarope import MyLlamaForCausalLM
         # use_flash_attn = True if "flash" in args.base_model else False

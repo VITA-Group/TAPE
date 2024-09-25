@@ -103,6 +103,9 @@ def train():
     elif config.rpe_type == "adape":
         from models.llama.adarope import MyLlamaForCausalLM
         LlamaForCausalLM = MyLlamaForCausalLM
+    elif config.rpe_type == 'adalibi':
+        from models.llama.adalibi import MyLlamaForCausalLM
+        LlamaForCausalLM = MyLlamaForCausalLM
     else:
         raise NotImplementedError
 

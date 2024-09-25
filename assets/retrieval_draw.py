@@ -14,10 +14,11 @@ plt.rc('figure', titlesize=BIGGER_SIZE)  # fontsize of the figure title
 
 # Provided data for three methods
 # base = {'890': 0.3, '1982': 0.3, '2801': 0.3, '3894': 0.3, '4986': 0.4, '5805': 0.4, '6898': 0.3, '7990': 0.6}
-base = {'890': 0.5, '1982': 0.4, '2801': 0.3, '3894': 0.4, '4986': 0.3, '5805': 0.3, '6898': 0.4, '7990': 0.5}
-longlora = {'890': 0.5, '1982': 0.4, '2801': 0.3, '3894': 0.4, '4986': 0.4, '5805': 0.5, '6898': 0.3, '7990': 0.5}
-lora = {'890': 0.5, '1982': 0.3, '2801': 0.3, '3894': 0.3, '4986': 0.3, '5805': 0.3, '6898': 0.3, '7990': 0.4}
-adape = {'890': 1.0, '1982': 1.0, '2801': 1.0, '3894': 1.0, '4986': 1.0, '5805': 0.9, '6898': 1.0, '7990': 1.0}
+# base = {'890': 0.5, '1982': 0.4, '2801': 0.3, '3894': 0.4, '4986': 0.3, '5805': 0.3, '6898': 0.4, '7990': 0.5}
+longlora = {'891': 0.4, '1982': 0.35, '2802': 0.4, '3895': 0.35, '4986': 0.5, '5805': 0.5, '6898': 0.5, '7990': 0.45}
+lora = {'891': 0.4, '1982': 0.4, '2802': 0.35, '3895': 0.35, '4986': 0.3, '5805': 0.35, '6898': 0.4, '7990': 0.35}
+adape = {'891': 1.0, '1982': 1.0, '2802': 1.0, '3895': 1.0, '4986': 1.0, '5805': 1.0, '6898': 0.95, '7990': 1.0}
+theta = {'891': 1.0, '1982': 1.0, '2802': 1.0, '3895': 1.0, '4986': 1.0, '5805': 1.0, '6898': 1.0, '7990': 0.95}
 
 # X-axis values (1k to 8k)
 x_labels = ['1k', '2k', '3k', '4k', '5k', '6k', '7k', '8k']
@@ -26,16 +27,17 @@ x_labels = ['1k', '2k', '3k', '4k', '5k', '6k', '7k', '8k']
 longlora_values = list(longlora.values())
 lora_values = list(lora.values())
 adape_values = list(adape.values())
-base_vaulues = list(base.values())
+# base_values = list(base.values())
+theta_values = list(theta.values())
 
 # Plotting
 plt.figure(figsize=(10, 4))
 
 # Plot each method's data
-plt.plot(x_labels, longlora_values, label="LongLoRA", marker='o')
-plt.plot(x_labels, adape_values, label="Adape", marker='o')
-plt.plot(x_labels, lora_values, label="LoRA", marker='o')
-# plt.plot(x_labels, base_vaulues, label="Base", marker='o')
+plt.plot(x_labels, longlora_values, label="LongLoRA", marker='s', linestyle='-.')
+plt.plot(x_labels, lora_values, label="LoRA", marker='o', linestyle='-.')
+plt.plot(x_labels, theta_values, label="Theta Scaling", marker='v', linestyle='-.')
+plt.plot(x_labels, adape_values, label="AdeRoPE", marker='^', linestyle='-.')
 
 # Adding titles and labels
 plt.title("Passkey Retrieval Accuracy", pad=20)
@@ -44,13 +46,13 @@ plt.title("Passkey Retrieval Accuracy", pad=20)
 
 # Adding grid only for horizontal lines (no vertical lines)
 # plt.xticks(range(len(x_labels)))
-plt.yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
+plt.yticks([0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
 plt.grid(axis='y', linestyle='--')
 # plt.grid(axis='y')
 
 # Adding legend
 # plt.legend()
-plt.legend(loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=3, frameon=False)
+plt.legend(loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=4, frameon=False)
 
 ax = plt.gca()  # Get the current axis
 ax.spines['top'].set_visible(False)

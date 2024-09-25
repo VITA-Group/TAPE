@@ -37,6 +37,7 @@ if len(data_values) == 1:
     axes = [axes]
 
 legend_mapping = {
+    'alibi': 'ALiBi',
     'rope': 'RoPE',
     'adape': 'AdeRoPE',
     # 添加其他模型的映射

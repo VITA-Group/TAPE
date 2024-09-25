@@ -175,6 +175,7 @@ class LlamaAttention(nn.Module):
     def _init_alibi(self, device=None):
         def get_slopes(n):
             def get_slopes_power_of_2(n):
+                # start is 2^(-8/n)
                 start = (2**(-2**-(math.log2(n)-3)))
                 ratio = start
                 return [start*ratio**i for i in range(n)]
@@ -190,8 +191,8 @@ class LlamaAttention(nn.Module):
         #In the next line, the part after the * is what constructs the diagonal matrix (right matrix in Figure 3 in the paper). 
         #If you run it you'll see that it doesn't exactly print out the same matrix as we have in Figure 3, but one where all rows are identical.
         #This works because the softmax operation is invariant to translation, and our bias functions are always linear. 
-        alibi = self.slopes.unsqueeze(1).unsqueeze(1) * torch.arange(maxpos).unsqueeze(0).unsqueeze(0).expand(attn_heads, -1, -1)
-        alibi = alibi.unsqueeze(0).view(1, attn_heads, 1, maxpos).to(device)
+        alibi = self.slopes.unsqueeze(1).unsqueeze(1) * torch.arange(maxpos).unsqueeze(0).unsqueeze(0).expand(attn_heads, -1, -1) # (attn_heads, 1, maxpos)
+        alibi = alibi.unsqueeze(0).view(1, attn_heads, 1, maxpos).to(device) 
         self.register_buffer("alibi", alibi)
 
     def _init_alibi_mul96(self, device=None):
@@ -274,6 +275,7 @@ class LlamaAttention(nn.Module):
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
+        # query_states: bsz, num_heads, seq_len, head_dim
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
         if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
@@ -291,6 +293,7 @@ class LlamaAttention(nn.Module):
         if self.rpe_type == "bipe_alibi":
             attn_weights = attn_weights + self.alibi[:, :, :, :kv_seq_len].squeeze().transpose(1,0)[position_ids].transpose(2,1).unsqueeze(2)
         else:
+            # alibi: (1, attn_heads, 1, maxpos)
             attn_weights = attn_weights + self.alibi[:, :, :, :kv_seq_len]
 
         if attention_mask is not None:

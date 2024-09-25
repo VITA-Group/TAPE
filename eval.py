@@ -265,7 +265,7 @@ def main():
             return path.split('_')[-1]
         elif type == "model":
             paths = path.split('/')
-            name = [part for part in paths if 'pile' in part][-1]
+            name = [part for part in paths if 'pile' in part or 'c4' in part][-1]
             return name.rpartition('_')[0]
 
     data_name = extract_name(args.dataset_cache_dir, "data")

@@ -34,7 +34,7 @@ def parse_config():
     parser.add_argument('--flash_attn', type=bool, default=True, help='whether to use flash attention 2')
     parser.add_argument('--max_tokens', type=int, default=32000, help='maximum token length for evaluation')
     parser.add_argument('--interval', type=int, default=1000, help='interval for evaluation')
-    parser.add_argument('--num_tests', type=int, default=10, help='number of repeat testing for each length')
+    parser.add_argument('--num_tests', type=int, default=20, help='number of repeat testing for each length')
 
     args = parser.parse_args()
     return args
