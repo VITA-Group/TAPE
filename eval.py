@@ -28,8 +28,8 @@ from transformers import (
     default_data_collator,
     get_scheduler,
 )
-from models.llama.bipe_rope import MyLlamaForCausalLM as MyLlamaForCausalLM_bipe_rope
-from models.llama.bipe_alibi import MyLlamaForCausalLM as MyLlamaForCausalLM_bipe_alibi
+from models.llama.rope import MyLlamaForCausalLM as MyLlamaForCausalLM_bipe_rope
+from models.llama.alibi import MyLlamaForCausalLM as MyLlamaForCausalLM_bipe_alibi
 from config_llama import MyLlamaConfig
 
 logger = get_logger(__name__)

@@ -32,14 +32,14 @@ $command --nproc_per_node $NGPUS --nnodes $NNODES \
         --dataset_cache_dir ../data/c4 \
         --output_dir "output/${TYPE}_c4" \
         --config_name "config/${TYPE}.json" \
-        --resume_from_checkpoint false \
+        --resume_from_checkpoint true \
         --max_steps $max_steps \
         --warmup_ratio 0.02 \
         --lr_scheduler_type polynomial \
-        --save_steps 100 \
+        --save_steps 50 \
         --save_total_limit 1 \
-        --eval_steps 100 \
-        --logging_steps 50 \
+        --eval_steps 50 \
+        --logging_steps 25 \
         --weight_decay 0.01 \
         --learning_rate 1e-4 \
         --model_max_position_embeddings 1024 \

@@ -31,8 +31,6 @@ from config_llama import MyLlamaConfig
 from transformers import Trainer, AutoConfig, default_data_collator, AutoTokenizer
 from datasets import load_dataset, load_from_disk
 
-from models.llama.bipe_rope import MyLlamaForCausalLM as MyLlamaForCausalLM_bipe_rope
-from models.llama.bipe_alibi import MyLlamaForCausalLM as MyLlamaForCausalLM_bipe_alibi
 
 transformers.logging.set_verbosity_info()
 
@@ -69,7 +67,6 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer, output_dir: st
         cpu_state_dict = {key: value.cpu() for key, value in state_dict.items()}
         del state_dict
         trainer._save(output_dir, state_dict=cpu_state_dict)  # noqa
-
               
 def train():
     parser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
@@ -84,40 +81,45 @@ def train():
 
     scaled_max_position_embeddings=int(training_args.model_max_position_embeddings * training_args.rope_scaling_factor)
     config.max_position_embeddings=scaled_max_position_embeddings
+    config.use_flash_attention_2 = training_args.use_flash_attention_2
 
     if training_args.rope_scaling_type is not None:
-        config.rope_scaling={"type": training_args.rope_scaling_type, "factor": training_args.rope_scaling_factor}
-        if 'yarn' in training_args.rope_scaling_type:
-            config.rope_scaling["original_max_position_embeddings"] = training_args.model_max_position_embeddings
+        config.rope_scaling = {
+            "type": training_args.rope_scaling_type,
+            "factor": training_args.rope_scaling_factor
+            }
+        # if 'yarn' in training_args.rope_scaling_type:
+        config.rope_scaling["original_max_position_embeddings"] = training_args.model_max_position_embeddings
+    elif config.rpe_type in ['yarn', 'adayarn']:
+        config.rope_scaling = {
+            "type": config.rpe_type,
+            "factor": training_args.rope_scaling_factor
+            }
+        config.rope_scaling["original_max_position_embeddings"] = training_args.model_max_position_embeddings
         
-    if config.rpe_type == "bipe_rope" or config.rpe_type == "rope":
-        LlamaForCausalLM = MyLlamaForCausalLM_bipe_rope
-    elif config.rpe_type == "bipe_alibi" or config.rpe_type == "alibi":
-        LlamaForCausalLM = MyLlamaForCausalLM_bipe_alibi
-    # elif config.rpe_type == 'ada_rope':
-    #     from models.llama.ada_rope import MyLlamaForCausalLM
-    #     LlamaForCausalLM = MyLlamaForCausalLM
-    # elif config.rpe_type == "adape":
-    #     from models.llama.add_adape import AdaLlamaForCausalLM
-    #     LlamaForCausalLM = AdaLlamaForCausalLM
+    if config.rpe_type == "rope":
+        from models.llama.rope import MyLlamaForCausalLM
+    elif config.rpe_type == "alibi":
+        from models.llama.alibi import MyLlamaForCausalLM
     elif config.rpe_type == "adape":
         from models.llama.adarope import MyLlamaForCausalLM
-        LlamaForCausalLM = MyLlamaForCausalLM
     elif config.rpe_type == "yarn":
-        from models.llama.yarn import YarnLlamaForCausalLM
-        LlamaForCausalLM = YarnLlamaForCausalLM
+        from models.llama.yarn import MyLlamaForCausalLM
+    elif config.rpe_type == 't5rb':
+        from models.llama.t5rb import MyLlamaForCausalLM
+    elif config.rpe_type == 'fire':
+        from models.llama.fire import MyLlamaForCausalLM
+    elif config.rpe_type == 'nope':
+        from models.llama.nope import MyLlamaForCausalLM
     elif config.rpe_type == 'adayarn':
         from models.llama.adayarn import MyLlamaForCausalLM
-        LlamaForCausalLM = MyLlamaForCausalLM
     elif config.rpe_type == 'adalibi':
         from models.llama.adalibi import MyLlamaForCausalLM
-        LlamaForCausalLM = MyLlamaForCausalLM
     else:
         raise NotImplementedError
 
     if model_args.model_name_or_path:
-        config.use_flash_attention_2 = training_args.use_flash_attention_2
-        model = LlamaForCausalLM.from_pretrained(
+        model = MyLlamaForCausalLM.from_pretrained(
             model_args.model_name_or_path,
             config=config,
         )
@@ -125,8 +127,7 @@ def train():
             n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
             print(f"Finetuning model from {model_args.model_name_or_path} - Model Size={n_params/2**20:.2f}M parameters")
     else:
-        config.use_flash_attention_2 = training_args.use_flash_attention_2
-        model = LlamaForCausalLM(config)
+        model = MyLlamaForCausalLM(config)
         n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
         if training_args.local_rank == 0:
             print(f"Training new model from scratch - Total Size={n_params/2**20:.2f}M parameters")
@@ -219,8 +220,8 @@ def train():
     
         return raw_datasets
     
-    raw_datasets = load_dataset("allenai/c4", "en", streaming=True)
-    # raw_datasets = load_json_dataset("/scratch/gpfs/DATASETS/hugging_face/c4/en")
+    # raw_datasets = load_dataset("allenai/c4", "en", streaming=True)
+    raw_datasets = load_json_dataset("/scratch/gpfs/DATASETS/hugging_face/c4/en")
     # raw_datasets = load_dataset("/scratch/gpfs/DATASETS/hugging_face/c4/en", split={"train": "train[:10%]", "validation": "validation"}, chunksize=10<<23)
     # raw_datasets = load_dataset("/scratch/gpfs/DATASETS/hugging_face/c4/en", split={"train": "train[:10%]", "validation": "validation"}, streaming=True)
 
@@ -338,7 +339,7 @@ def train():
 
     train_dataset = lm_datasets["train"]
     valid_dataset = lm_datasets["validation"]
-    # test_dataset = lm_datasets["test"]
+    test_dataset = lm_datasets["test"]
 
 
     if training_args.local_rank == 0:
