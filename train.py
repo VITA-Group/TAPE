@@ -29,7 +29,7 @@ import transformers
 from config_llama import MyLlamaConfig
 # from torch.utils.data import Dataset
 from transformers import Trainer, AutoConfig, default_data_collator, AutoTokenizer
-from datasets import load_dataset, load_from_disk
+from datasets import load_dataset, load_from_disk, IterableDataset
 
 
 transformers.logging.set_verbosity_info()
@@ -184,8 +184,8 @@ def train():
         data_files['train'] = [os.path.join(dataset_dir, filename) for filename in data_files['train']]
         data_files['validation'] = sorted(data_files['validation'])
         data_files['validation'] = [os.path.join(dataset_dir, filename) for filename in data_files['validation']]
-        print(data_files['train'][0])
-        print(data_files['validation'][0])
+        # print(data_files['train'][0])
+        # print(data_files['validation'][0])
     
         if dataset_subsample_rate is not None and dataset_subsample_rate < 1.0:
             data_files['train'] = uniform_sample_list(data_files['train'], dataset_subsample_rate)
@@ -357,6 +357,30 @@ def train():
     #Tell Trainer not to attempt DataParallel
     model.is_parallelizable = True
     model.model_parallel = True
+
+    #! specially for skip streaming dataset for later batch.
+    n_lastest_iter = 0
+    if training_args.resume_from_checkpoint == True:
+        # search for the latest checkpoint
+        from pathlib import Path
+        all_checkpoints = list(Path(training_args.output_dir).glob("checkpoint-*"))
+        all_checkpoints = [x for x in all_checkpoints if (x / "trainer_state.json").exists() and not x.name.endswith("final")]
+        if len(all_checkpoints) == 0:
+            training_args.resume_from_checkpoint = None
+            print("No checkpoint found, starting from scratch")
+        else:
+            all_checkpoints = [str(x) for x in all_checkpoints]
+            latest_checkpoint = max(all_checkpoints, key=os.path.getctime)
+            training_args.resume_from_checkpoint = latest_checkpoint
+            print("Resuming from checkpoint", latest_checkpoint)
+            n_lastest_iter = int(latest_checkpoint.split('-')[-1])
+
+    if isinstance(train_dataset, IterableDataset):
+        shuffle_seed = training_args.data_seed + n_lastest_iter if training_args.data_seed is not None else training_args.seed + n_lastest_iter
+        train_dataset = train_dataset.shuffle(seed=shuffle_seed)
+        training_args.ignore_data_skip = True
+        print("*** Set ignore_data_skip=True for streaming mode to save time ***")
+
 
     trainer = Trainer(model=model, tokenizer=tokenizer, args=training_args, **data_module)
     model.config.use_cache = False
