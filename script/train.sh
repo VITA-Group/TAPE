@@ -36,22 +36,16 @@ $command --nproc_per_node $NGPUS --nnodes $NNODES \
         --max_steps $max_steps \
         --warmup_ratio 0.02 \
         --lr_scheduler_type polynomial \
-        --save_steps 50 \
+        --save_steps 100 \
         --save_total_limit 1 \
-        --eval_steps 50 \
-        --logging_steps 25 \
+        --logging_steps 50 \
         --weight_decay 0.01 \
         --learning_rate 1e-4 \
         --model_max_position_embeddings 1024 \
         --per_device_train_batch_size 8 \
-        --per_device_eval_batch_size 8 \
         --gradient_accumulation_steps 16 \
         --do_train True \
-        --do_eval True \
         --do_predict True \
-        --evaluation_strategy "steps" \
         --save_strategy "steps" \
-        --load_best_model_at_end True \
-        --report_to "tensorboard" \
         --gradient_checkpointing False \
         --bf16 True

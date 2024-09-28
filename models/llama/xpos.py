@@ -1,3 +1,5 @@
+# Adapted from https://github.com/kaiokendev/cutoff-len-is-context-len/blob/acbf0173f18ba2d407880c40172197061e38ebd0/util/xpos_rope_llama_monkey_patch.py
+
 # coding=utf-8
 # Copyright 2022 EleutherAI and the HuggingFace Inc. team. All rights reserved.
 #
@@ -29,8 +31,8 @@ from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa
 from utils import flash_attn_func as flash_attn_func2
 from flash_attn import flash_attn_func
-
 from flash_attn import flash_attn_varlen_func
+from einops import rearrange
 
 # from ...activations import ACT2FN
 # from ...modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast, SequenceClassifierOutputWithPast
@@ -99,6 +101,85 @@ class LlamaRMSNorm(nn.Module):
         return self.weight * hidden_states.to(input_dtype)
 
 
+class XposRotaryEmbedding(torch.nn.Module):
+    def __init__(
+        self,
+        dim,
+        max_position_embeddings=2048,
+        base=10000,
+        device=None,
+        scale_base=2048,
+        use_xpos=True,
+    ):
+        super().__init__()
+        self.max_seq_len_cached = max_position_embeddings
+        self.scale_base = scale_base
+
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
+        t = torch.arange(self.max_seq_len_cached, device=device).type_as(inv_freq)
+        freqs = torch.einsum("i , j -> i j", t, inv_freq)
+        freqs = torch.cat((freqs, freqs), dim=-1)
+
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+        self.register_buffer("freqs_cached", freqs, persistent=False)
+
+        if not use_xpos:
+            self.register_buffer("scale", None)
+            self.register_buffer("scale_cached", torch.ones(1))
+            return
+
+        scale = (torch.arange(0, dim, 2) + 0.4 * dim) / (1.4 * dim)
+        power = (t - (self.max_seq_len_cached // 2)) / self.scale_base
+        scale_cached = scale ** rearrange(power, "n -> n 1")
+        scale_cached = torch.cat((scale_cached, scale_cached), dim=-1)
+
+        self.register_buffer("scale", scale, persistent=False)
+        self.register_buffer("scale_cached", scale_cached, persistent=False)
+
+    def forward(
+        self,
+        x,
+        seq_len,
+    ):
+        if seq_len > self.max_seq_len_cached:
+            self.max_seq_len_cached = seq_len
+            t = torch.arange(self.max_seq_len_cached, device=x.device).type_as(
+                self.inv_freq
+            )
+            freqs = torch.einsum("i , j -> i j", t, self.inv_freq)
+            freqs = torch.cat((freqs, freqs), dim=-1).to(dtype=x.dtype)
+
+            self.register_buffer("freqs_cached", freqs)
+
+            if self.scale is None:
+                self.register_buffer(
+                    "scale_cached", torch.ones(1, device=x.device).to(dtype=x.dtype)
+                )
+
+                return self.freqs_cached.to(dtype=x.dtype), self.scale_cached
+
+            power = (t - (seq_len // 2)) / self.scale_base
+            scale = self.scale ** rearrange(power, "n -> n 1")
+            scale = torch.cat((scale, scale), dim=-1).to(dtype=x.dtype)
+            self.register_buffer("scale_cached", scale)
+
+        return self.freqs_cached.to(dtype=x.dtype), self.scale_cached.to(dtype=x.dtype)
+
+
+def rotate_half(x):
+    x1, x2 = x.chunk(2, dim=-1)
+    return torch.cat((-x2, x1), dim=-1)
+
+def apply_rotary_pos_emb(q, k, freqs, scale=1, position_ids=None):
+    freqs = freqs[position_ids, :]
+    if scale.shape[-1] != 1:
+        scale = scale[position_ids, :]
+
+    q_embed = (q * freqs.cos() * scale) + (rotate_half(q) * freqs.sin() * scale)
+    k_embed = (k * freqs.cos() * 1/scale) + (rotate_half(k) * freqs.sin() * 1/scale)
+
+    return q_embed, k_embed
+
 class LlamaMLP(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -144,72 +225,6 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
-class FIRE(torch.nn.Module):
-    def __init__(self, num_heads=12, mlp_width=32, init_c=0.1, init_L=512.0, eps=1e-6, max_length=0):
-        """
-        FIRE attention bias module (https://arxiv.org/abs/2310.04418).
-
-        Args:
-            num_heads: number of attention heads.
-            mlp_width: Width of MLP.
-            init_c: initial value of log transformation parameter
-            init_L: initial value of thresholding parameter
-            eps: small constant for numerical stability
-        """
-        super(FIRE, self).__init__()
-        self.max_length = max_length  # using random PE
-
-        # Define the MLP layers
-        self.mlp = torch.nn.Sequential(torch.nn.Linear(1, mlp_width), torch.nn.ReLU(), torch.nn.Linear(mlp_width, num_heads))
-
-        # Initialize c (log transformation parameter)
-        self.c = torch.nn.Parameter(torch.tensor(init_c))
-
-        # Initialize L (threshold)
-        self.init_L = torch.nn.Parameter(torch.tensor(init_L), requires_grad=False)
-        self.L_multiplier = torch.nn.Parameter(torch.tensor(1.0))  # learn a multiplier to L
-
-        self.eps = eps
-
-    def forward(self, seq_length, device):
-        dtype = self.mlp[0].weight.dtype
-        """
-        Compute FIRE attention bias (https://arxiv.org/abs/2310.04418).
-
-        Args:
-            x: input sequence, shape [bsz, num_heads, seq_len, hidden_dim]
-
-        Returns:
-            attention bias of shape [1, num_heads, seq_len, seq_len]
-        """
-        if (seq_length > self.max_length) or (
-            not self.training
-        ):  # max length will be increased to max sequnece length if max length is short
-            max_length = seq_length
-        else:
-            max_length = self.max_length
-
-        # take a subset (of length seq_length) of a random permutation of length max_length, then sort it to
-        # positions = torch.sort(torch.randperm(max_length, dtype=torch.float, device=device)[:seq_length]).values
-        positions = torch.arange(max_length, dtype=torch.float, device=device)
-        relative_distances = positions[:, None] - positions[None, :]
-        
-        # Thresholding the normalizer for short sequence modeling
-        threshold = torch.abs(self.L_multiplier * self.init_L)
-        position_normalizer = torch.max(positions, threshold)[:, None]
-
-        # Amplifying differences among local positions with log transform
-        relative_distances = torch.log(torch.abs(self.c * relative_distances) + 1)
-        position_normalizer = torch.log(torch.abs(self.c * position_normalizer) + 1)
-
-        # Progressive interpolation
-        normalized_distances = relative_distances / (position_normalizer + self.eps)
-        normalized_distances = normalized_distances.to(dtype)
-        fire_bias = self.mlp(normalized_distances.unsqueeze(-1)).unsqueeze(0)
-        fire_bias = fire_bias.permute(0, 3, 1, 2)
-        
-        # shape: [1, n_heads, sq, sk]
-        return fire_bias
 
 class LlamaAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
@@ -226,7 +241,6 @@ class LlamaAttention(nn.Module):
         self.rpe_type = config.rpe_type
         self.log_scale = config.log_scale
         self.train_scale = config.train_scale
-        self.rotary_emb = FIRE(self.num_heads)
 
         if (self.head_dim * self.num_heads) != self.hidden_size:
             raise ValueError(
@@ -237,8 +251,15 @@ class LlamaAttention(nn.Module):
         self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
         self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
-        self.rotary_emb = FIRE()
         
+        self._init_rope()
+
+    def _init_rope(self):
+        if self.config.rope_scaling is None:
+            self.rotary_emb = XposRotaryEmbedding(self.head_dim, max_position_embeddings=self.max_position_embeddings)
+        else:
+            raise ValueError(f"Not support scaling")
+
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
@@ -285,8 +306,9 @@ class LlamaAttention(nn.Module):
         if past_key_value is not None:
             kv_seq_len += past_key_value[0].shape[-2]
 
-        fire = self.rotary_emb(kv_seq_len, query_states.device)
-
+        freqs, scale = self.rotary_emb(value_states, seq_len=kv_seq_len)
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, freqs, scale, position_ids)
+            
         if past_key_value is not None:
             # reuse k, v, self_attention
             key_states = torch.cat([past_key_value[0], key_states], dim=2)
@@ -298,9 +320,7 @@ class LlamaAttention(nn.Module):
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
-        # shape: [bs, num_heas, ]
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
-        attn_weights += fire
 
         if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
             raise ValueError(
@@ -340,7 +360,7 @@ class LlamaAttention(nn.Module):
 
         return attn_output, attn_weights, past_key_value
 
-from transformers.models.llama.modeling_llama import LlamaModel
+# from transformers.models.llama.modeling_llama import LlamaModel
 class LlamaFlashAttention2(LlamaAttention):
     """
     Llama flash attention module. This module inherits from `LlamaAttention` as the weights of the module stays
@@ -378,6 +398,9 @@ class LlamaFlashAttention2(LlamaAttention):
         if past_key_value is not None:
             kv_seq_len += past_key_value[0].shape[-2]
 
+        freqs, scale = self.rotary_emb(value_states, seq_len=kv_seq_len)
+
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, freqs, scale, position_ids)
 
         if past_key_value is not None:
             # reuse k, v, self_attention
@@ -530,12 +553,11 @@ class LlamaDecoderLayer(nn.Module):
     def __init__(self, config: LlamaConfig):
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.self_attn = LlamaAttention(config=config)
-        # self.self_attn = (
-        #     LlamaAttention(config=config)
-        #     if not getattr(config, "use_flash_attention_2", False) or config.use_flash_attention_2 == 'none'
-        #     else LlamaFlashAttention2(config=config)
-        # )
+        self.self_attn = (
+            LlamaAttention(config=config)
+            if not getattr(config, "use_flash_attention_2", False) or config.use_flash_attention_2 == 'none'
+            else LlamaFlashAttention2(config=config)
+        )
         self.mlp = LlamaMLP(config)
         self.input_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)

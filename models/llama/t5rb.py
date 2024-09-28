@@ -238,7 +238,7 @@ class LlamaAttention(nn.Module):
         relative_position = memory_position - context_position  # shape (query_length, key_length)
         relative_position_bucket = self._relative_position_bucket(
             relative_position,  # shape (query_length, key_length)
-            bidirectional=(not self.is_decoder),
+            bidirectional=False,
             num_buckets=self.relative_attention_num_buckets,
             max_distance=self.relative_attention_max_distance,
         )
@@ -304,7 +304,7 @@ class LlamaAttention(nn.Module):
 
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
         position_bias = self.compute_bias(kv_seq_len, device=attn_weights.device)
-        attention_mask +=  position_bias
+        attn_weights += position_bias
 
         if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
             raise ValueError(

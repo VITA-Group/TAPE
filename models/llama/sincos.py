@@ -43,11 +43,20 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings
 from transformers.models.llama.configuration_llama import LlamaConfig
 
-
 logger = logging.get_logger(__name__)
 
 _CONFIG_FOR_DOC = "LlamaConfig"
 
+
+def create_sinusoidal_embeddings(x):
+    bsz, seq_len, dim = x.shape
+    pos = torch.arange(seq_len, dtype=x.dtype, device=x.device).unsqueeze(1)
+    div_term = torch.pow(10000, torch.arange(0, dim, 2).float() / dim).to(device=x.device).to(dtype=x.dtype)
+    # Generate sinusoidal embeddings directly
+    position_enc = torch.zeros(seq_len, dim, device=x.device, dtype=x.dtype)
+    position_enc[:, 0::2] = torch.sin(pos / div_term)  # Even indices
+    position_enc[:, 1::2] = torch.cos(pos / div_term)  # Odd indices
+    return position_enc.squeeze(0)
 
 # Copied from transformers.models.bart.modeling_bart._make_causal_mask
 def _make_causal_mask(
@@ -144,72 +153,6 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
-class FIRE(torch.nn.Module):
-    def __init__(self, num_heads=12, mlp_width=32, init_c=0.1, init_L=512.0, eps=1e-6, max_length=0):
-        """
-        FIRE attention bias module (https://arxiv.org/abs/2310.04418).
-
-        Args:
-            num_heads: number of attention heads.
-            mlp_width: Width of MLP.
-            init_c: initial value of log transformation parameter
-            init_L: initial value of thresholding parameter
-            eps: small constant for numerical stability
-        """
-        super(FIRE, self).__init__()
-        self.max_length = max_length  # using random PE
-
-        # Define the MLP layers
-        self.mlp = torch.nn.Sequential(torch.nn.Linear(1, mlp_width), torch.nn.ReLU(), torch.nn.Linear(mlp_width, num_heads))
-
-        # Initialize c (log transformation parameter)
-        self.c = torch.nn.Parameter(torch.tensor(init_c))
-
-        # Initialize L (threshold)
-        self.init_L = torch.nn.Parameter(torch.tensor(init_L), requires_grad=False)
-        self.L_multiplier = torch.nn.Parameter(torch.tensor(1.0))  # learn a multiplier to L
-
-        self.eps = eps
-
-    def forward(self, seq_length, device):
-        dtype = self.mlp[0].weight.dtype
-        """
-        Compute FIRE attention bias (https://arxiv.org/abs/2310.04418).
-
-        Args:
-            x: input sequence, shape [bsz, num_heads, seq_len, hidden_dim]
-
-        Returns:
-            attention bias of shape [1, num_heads, seq_len, seq_len]
-        """
-        if (seq_length > self.max_length) or (
-            not self.training
-        ):  # max length will be increased to max sequnece length if max length is short
-            max_length = seq_length
-        else:
-            max_length = self.max_length
-
-        # take a subset (of length seq_length) of a random permutation of length max_length, then sort it to
-        # positions = torch.sort(torch.randperm(max_length, dtype=torch.float, device=device)[:seq_length]).values
-        positions = torch.arange(max_length, dtype=torch.float, device=device)
-        relative_distances = positions[:, None] - positions[None, :]
-        
-        # Thresholding the normalizer for short sequence modeling
-        threshold = torch.abs(self.L_multiplier * self.init_L)
-        position_normalizer = torch.max(positions, threshold)[:, None]
-
-        # Amplifying differences among local positions with log transform
-        relative_distances = torch.log(torch.abs(self.c * relative_distances) + 1)
-        position_normalizer = torch.log(torch.abs(self.c * position_normalizer) + 1)
-
-        # Progressive interpolation
-        normalized_distances = relative_distances / (position_normalizer + self.eps)
-        normalized_distances = normalized_distances.to(dtype)
-        fire_bias = self.mlp(normalized_distances.unsqueeze(-1)).unsqueeze(0)
-        fire_bias = fire_bias.permute(0, 3, 1, 2)
-        
-        # shape: [1, n_heads, sq, sk]
-        return fire_bias
 
 class LlamaAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
@@ -226,7 +169,6 @@ class LlamaAttention(nn.Module):
         self.rpe_type = config.rpe_type
         self.log_scale = config.log_scale
         self.train_scale = config.train_scale
-        self.rotary_emb = FIRE(self.num_heads)
 
         if (self.head_dim * self.num_heads) != self.hidden_size:
             raise ValueError(
@@ -237,8 +179,8 @@ class LlamaAttention(nn.Module):
         self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
         self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
-        self.rotary_emb = FIRE()
         
+
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
@@ -285,8 +227,9 @@ class LlamaAttention(nn.Module):
         if past_key_value is not None:
             kv_seq_len += past_key_value[0].shape[-2]
 
-        fire = self.rotary_emb(kv_seq_len, query_states.device)
-
+        # cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+        # query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+            
         if past_key_value is not None:
             # reuse k, v, self_attention
             key_states = torch.cat([past_key_value[0], key_states], dim=2)
@@ -298,9 +241,7 @@ class LlamaAttention(nn.Module):
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
-        # shape: [bs, num_heas, ]
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
-        attn_weights += fire
 
         if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
             raise ValueError(
@@ -378,6 +319,8 @@ class LlamaFlashAttention2(LlamaAttention):
         if past_key_value is not None:
             kv_seq_len += past_key_value[0].shape[-2]
 
+        # cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+        # query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
         if past_key_value is not None:
             # reuse k, v, self_attention
@@ -530,12 +473,11 @@ class LlamaDecoderLayer(nn.Module):
     def __init__(self, config: LlamaConfig):
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.self_attn = LlamaAttention(config=config)
-        # self.self_attn = (
-        #     LlamaAttention(config=config)
-        #     if not getattr(config, "use_flash_attention_2", False) or config.use_flash_attention_2 == 'none'
-        #     else LlamaFlashAttention2(config=config)
-        # )
+        self.self_attn = (
+            LlamaAttention(config=config)
+            if not getattr(config, "use_flash_attention_2", False) or config.use_flash_attention_2 == 'none'
+            else LlamaFlashAttention2(config=config)
+        )
         self.mlp = LlamaMLP(config)
         self.input_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -633,6 +575,10 @@ class LlamaPreTrainedModel(PreTrainedModel):
             module.weight.data.normal_(mean=0.0, std=std)
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
+        # if isinstance(module, LlamaModel):
+        #     create_sinusoidal_embeddings(
+        #         self.config.max_position_embeddings, self.config.emb_dim, out=module.position_embeddings.weight
+        #     )
 
     def _set_gradient_checkpointing(self, module, value=False):
         if isinstance(module, LlamaModel):
@@ -726,6 +672,7 @@ class LlamaModel(LlamaPreTrainedModel):
 
         self.gradient_checkpointing = False
         self.config = config
+        self.max_position_embeddings = config.max_position_embeddings
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -759,6 +706,10 @@ class LlamaModel(LlamaPreTrainedModel):
             )
 
         return combined_attention_mask
+
+    def position_encoding(self, x, seq_length):
+        if seq_length > self.config.max_position_embeddings:
+            pass
 
     @add_start_docstrings_to_model_forward(LLAMA_INPUTS_DOCSTRING)
     def forward(
@@ -810,6 +761,8 @@ class LlamaModel(LlamaPreTrainedModel):
 
         assert inputs_embeds is None
         inputs_embeds = self.embed_tokens(input_ids)
+        # inputs_embeds += self.position_encoding(inputs_embeds, seq_length)
+        inputs_embeds += create_sinusoidal_embeddings(inputs_embeds)
 
         # embed positions
         if attention_mask is None:

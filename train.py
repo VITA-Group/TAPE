@@ -72,12 +72,14 @@ def train():
     parser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
+    type = model_args.config_name.split('/')[-1].split('.')[0]
     if model_args.config_name:
         config = MyLlamaConfig.from_pretrained(model_args.config_name)
     elif model_args.model_name_or_path:
         config = MyLlamaConfig.from_pretrained(model_args.model_name_or_path)
     else:
         raise NotImplementedError
+    assert type == config.rpe_type, f"not matched positional embeddding for config name {type} and config content {config.rpe_type}"
 
     scaled_max_position_embeddings=int(training_args.model_max_position_embeddings * training_args.rope_scaling_factor)
     config.max_position_embeddings=scaled_max_position_embeddings
@@ -97,26 +99,39 @@ def train():
             }
         config.rope_scaling["original_max_position_embeddings"] = training_args.model_max_position_embeddings
         
-    if config.rpe_type == "rope":
-        from models.llama.rope import MyLlamaForCausalLM
-    elif config.rpe_type == "alibi":
-        from models.llama.alibi import MyLlamaForCausalLM
-    elif config.rpe_type == "adape":
-        from models.llama.adarope import MyLlamaForCausalLM
-    elif config.rpe_type == "yarn":
-        from models.llama.yarn import MyLlamaForCausalLM
-    elif config.rpe_type == 't5rb':
-        from models.llama.t5rb import MyLlamaForCausalLM
-    elif config.rpe_type == 'fire':
-        from models.llama.fire import MyLlamaForCausalLM
-    elif config.rpe_type == 'nope':
-        from models.llama.nope import MyLlamaForCausalLM
-    elif config.rpe_type == 'adayarn':
-        from models.llama.adayarn import MyLlamaForCausalLM
-    elif config.rpe_type == 'adalibi':
-        from models.llama.adalibi import MyLlamaForCausalLM
-    else:
-        raise NotImplementedError
+    try:
+        module_name = config.rpe_type
+        MyLlamaForCausalLM = __import__(f"models.llama.{module_name}", fromlist=["MyLlamaForCausalLM"]).MyLlamaForCausalLM
+    except:
+        rpe_types = [
+            "rope", "sincos", "randrope", "alibi", "adarope", "yarn", 
+            "t5rb", "fire", "xpos", "nope", "adayarn", "adalibi",
+        ]
+        raise NotImplementedError(f"Unknown positional embedding {module_name}, choose from {rpe_types}")
+    # if config.rpe_type == "rope":
+    #     from models.llama.rope import MyLlamaForCausalLM
+    # elif config.rpe_type == 'randrope':
+    #     from models.llama.randrope import MyLlamaForCausalLM
+    # elif config.rpe_type == "alibi":
+    #     from models.llama.alibi import MyLlamaForCausalLM
+    # elif config.rpe_type == "adape":
+    #     from models.llama.adarope import MyLlamaForCausalLM
+    # elif config.rpe_type == "yarn":
+    #     from models.llama.yarn import MyLlamaForCausalLM
+    # elif config.rpe_type == 't5rb':
+    #     from models.llama.t5rb import MyLlamaForCausalLM
+    # elif config.rpe_type == 'fire':
+    #     from models.llama.fire import MyLlamaForCausalLM
+    # elif config.rpe_type == 'xpos':
+    #     from models.llama.xpos import MyLlamaForCausalLM
+    # elif config.rpe_type == 'nope':
+    #     from models.llama.nope import MyLlamaForCausalLM
+    # elif config.rpe_type == 'adayarn':
+    #     from models.llama.adayarn import MyLlamaForCausalLM
+    # elif config.rpe_type == 'adalibi':
+    #     from models.llama.adalibi import MyLlamaForCausalLM
+    # else:
+    #     raise NotImplementedError
 
     if model_args.model_name_or_path:
         model = MyLlamaForCausalLM.from_pretrained(
@@ -207,13 +222,13 @@ def train():
     
         # remove train/test set to accelerate data loading if training/validation only
         if not training_args.do_train:
-            data_files.pop('train')
+            data_files['train'] = []
     
         if not training_args.do_eval:
-            data_files.pop('validation')
+            data_files['validation'] = []
         
         if not training_args.do_predict:
-            data_files.pop("test")
+            data_files["test"] = []
     
         print_rank_0(f"Loading json dataset from {dataset_dir}, {len(data_files.get('train', []))} train files, {len(data_files.get('test', []))} test files")
         raw_datasets = load_dataset("json", data_files=data_files, streaming=True)
