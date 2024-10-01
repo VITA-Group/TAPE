@@ -834,7 +834,7 @@ class LlamaModel(LlamaPreTrainedModel):
         else:
             raise ValueError("You have to specify either decoder_input_ids or decoder_inputs_embeds")
 
-        assert past_key_values is None
+        # assert past_key_values is None
         seq_length_with_past = seq_length
         past_key_values_length = 0
 

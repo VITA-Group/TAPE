@@ -428,7 +428,6 @@ class LlamaFlashAttention2(LlamaAttention):
 
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
 
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
         if past_key_value is not None:
             # reuse k, v, self_attention
@@ -436,6 +435,8 @@ class LlamaFlashAttention2(LlamaAttention):
             value_states = torch.cat([past_key_value[1], value_states], dim=2)
 
         past_key_value = (key_states, value_states) if use_cache else None
+
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
         query_states = query_states.transpose(1, 2)
         key_states = key_states.transpose(1, 2)
@@ -468,6 +469,8 @@ class LlamaFlashAttention2(LlamaAttention):
         )
 
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
+        # print(attn_output.dtype)
+        # print(self.o_proj.weight.dtype)
         attn_output = self.o_proj(attn_output)
 
         if not output_attentions:
@@ -533,6 +536,7 @@ class LlamaFlashAttention2(LlamaAttention):
             if self.config.use_flash_attention_2 == "flash":
                 attn_output = flash_attn_func(query_states, key_states, value_states, dropout, softmax_scale=softmax_scale, causal=True) 
             else:
+
                 attn_output = flash_attn_func2(query_states, key_states, value_states, True, softmax_scale)
 
         return attn_output
@@ -841,7 +845,7 @@ class LlamaModel(LlamaPreTrainedModel):
         else:
             raise ValueError("You have to specify either decoder_input_ids or decoder_inputs_embeds")
 
-        assert past_key_values is None
+        # assert past_key_values is None
         seq_length_with_past = seq_length
         past_key_values_length = 0
 
@@ -1020,6 +1024,7 @@ class MyLlamaForCausalLM(LlamaPreTrainedModel):
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
+
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs = self.model(
             input_ids=input_ids,
@@ -1032,7 +1037,6 @@ class MyLlamaForCausalLM(LlamaPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
-
         hidden_states = outputs[0]
         if self.config.pretraining_tp > 1:
             lm_head_slices = self.lm_head.weight.split(self.vocab_size // self.config.pretraining_tp, dim=0)

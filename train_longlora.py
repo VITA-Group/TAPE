@@ -139,7 +139,7 @@ def train():
 
     # Load model and tokenizer
     if training_args.peft_type == 'adape':
-        from models.llama.adarope import MyLlamaForCausalLM
+        from models.llama.adape import MyLlamaForCausalLM
         # from transformers.models.llama.modeling_llama import LlamaForCausalLM as MyLlamaForCausalLM
         #! hyperparamter
         config.position_size = 4 * config.num_attention_heads

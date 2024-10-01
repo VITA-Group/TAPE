@@ -209,7 +209,9 @@ class LlamaYaRNScaledRotaryEmbedding(torch.nn.Module):
         self.dim = dim
         self.max_position_embeddings = max_position_embeddings
         self.base = base
-        self.scale = scale
+        # self.scale = scale
+        self.scale = (max_position_embeddings + original_max_position_embeddings - 1) // original_max_position_embeddings
+        # print("scale: ", self.scale)
         self.original_max_position_embeddings = original_max_position_embeddings
         self.extrapolation_factor = extrapolation_factor
         self.attn_factor = attn_factor
@@ -367,7 +369,7 @@ class LlamaAttention(nn.Module):
                     self.head_dim, max_position_embeddings=self.max_position_embeddings, scaling_factor=scaling_factor
                 )
             elif scaling_type == 'yarn':
-                original_max_position_embeddings = self.config.rope_scaling["original_max_position_embeddings"]
+                original_max_position_embeddings = self.config.original_max_position_embeddings
                 self.rotary_emb = LlamaYaRNScaledRotaryEmbedding(
                     self.head_dim, 
                     max_position_embeddings=self.max_position_embeddings, 

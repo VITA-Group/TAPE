@@ -285,7 +285,6 @@ class LlamaAttention(nn.Module):
         if past_key_value is not None:
             kv_seq_len += past_key_value[0].shape[-2]
 
-        fire = self.rotary_emb(kv_seq_len, query_states.device)
 
         if past_key_value is not None:
             # reuse k, v, self_attention
@@ -299,6 +298,8 @@ class LlamaAttention(nn.Module):
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
         # shape: [bs, num_heas, ]
+
+        fire = self.rotary_emb(kv_seq_len, query_states.device)
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
         attn_weights += fire
 
@@ -791,7 +792,7 @@ class LlamaModel(LlamaPreTrainedModel):
         else:
             raise ValueError("You have to specify either decoder_input_ids or decoder_inputs_embeds")
 
-        assert past_key_values is None
+        # assert past_key_values is None
         seq_length_with_past = seq_length
         past_key_values_length = 0
 
@@ -971,6 +972,8 @@ class MyLlamaForCausalLM(LlamaPreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
+        import time
+        start_time = time.perf_counter()
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -982,6 +985,10 @@ class MyLlamaForCausalLM(LlamaPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
+
+        end_time = time.perf_counter()
+        execution_time = end_time - start_time
+        print(f"forwad执行时间：{execution_time} 秒")
 
         hidden_states = outputs[0]
         if self.config.pretraining_tp > 1:

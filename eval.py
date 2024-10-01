@@ -17,7 +17,7 @@ from huggingface_hub import Repository, create_repo
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-import transformers
+from transformers.models.llama.modeling_llama import LlamaForCausalLM
 from transformers import (
     CONFIG_MAPPING,
     MODEL_MAPPING,
@@ -28,8 +28,6 @@ from transformers import (
     default_data_collator,
     get_scheduler,
 )
-from models.llama.rope import MyLlamaForCausalLM as MyLlamaForCausalLM_bipe_rope
-from models.llama.alibi import MyLlamaForCausalLM as MyLlamaForCausalLM_bipe_alibi
 from config_llama import MyLlamaConfig
 
 logger = get_logger(__name__)
@@ -165,33 +163,52 @@ def main():
             "You can do it from another script, save it, and load it from here, using --tokenizer_name."
         )
 
-    if config.rpe_type == "bipe_rope" or config.rpe_type == "rope":
-        LlamaForCausalLM = MyLlamaForCausalLM_bipe_rope
-    elif config.rpe_type == "bipe_alibi" or config.rpe_type == "alibi":
-        LlamaForCausalLM = MyLlamaForCausalLM_bipe_alibi
-    elif config.rpe_type == 'adape':
-        from models.llama.adarope import MyLlamaForCausalLM
-        LlamaForCausalLM = MyLlamaForCausalLM
+    # if config.rpe_type in ['yarn', 'adayarn']:
+    #     config.rope_scaling = {
+    #         "type": config.rpe_type,
+    #         "factor": training_args.rope_scaling_factor
+    #         }
+    #     config.rope_scaling["original_max_position_embeddings"] = training_args.model_max_position_embeddings
+    config.max_position_embeddings = args.block_size
+
+    try:
+        module_name = config.rpe_type
+        MyLlamaForCausalLM = __import__(f"models.llama.{module_name}", fromlist=["MyLlamaForCausalLM"]).MyLlamaForCausalLM
+    except:
+        rpe_types = [
+            "rope", "sincos", "randrope", "alibi", "adarope", "yarn", 
+            "t5rb", "fire", "xpos", "nope", "adayarn", "adalibi",
+        ]
+        raise NotImplementedError(f"Unknown positional embedding {module_name}, choose from {rpe_types}")
+    # if config.rpe_type == "bipe_rope" or config.rpe_type == "rope":
+    #     LlamaForCausalLM = MyLlamaForCausalLM_bipe_rope
+    # elif config.rpe_type == "bipe_alibi" or config.rpe_type == "alibi":
+    #     LlamaForCausalLM = MyLlamaForCausalLM_bipe_alibi
+    # elif config.rpe_type == 'adape':
+    #     from models.llama.adarope import MyLlamaForCausalLM
+    #     LlamaForCausalLM = MyLlamaForCausalLM
     # elif config.rpe_type== 'ada_rope':
     #     from models.llama.ada_rope import MyLlamaForCausalLM
     #     LlamaForCausalLM = MyLlamaForCausalLM
     # elif config.rpe_type == 'new_rope':
     #     from models.llama.new_rope import MyLlamaForCausalLM
     #     LlamaForCausalLM = MyLlamaForCausalLM
-    else:
-        raise NotImplementedError
+    # else:
+    #     raise NotImplementedError
 
     # if 'debug':
     #     from models.llama.new_rope import MyLlamaForCausalLM
     #     config.position_size = 36
     #     LlamaForCausalLM = MyLlamaForCausalLM
 
-    model = LlamaForCausalLM.from_pretrained(
+    model = MyLlamaForCausalLM.from_pretrained(
         args.model_name_or_path,
+        # ignore_mismatched_sizes=True,
         from_tf=bool(".ckpt" in args.model_name_or_path),
         config=config,
         low_cpu_mem_usage=args.low_cpu_mem_usage,
-        torch_dtype=torch_dtype
+        torch_dtype=torch_dtype,
+        trust_remote_code=True
     )
 
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch

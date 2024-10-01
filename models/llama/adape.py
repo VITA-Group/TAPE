@@ -27,10 +27,10 @@ import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from transformers.models.llama.modeling_llama import LlamaModel
-from utils.triton_utils import adape_flash_attn_func
-from utils.triton_utils import flash_attn_func as flash_attn_func2
+# from utils.triton_utils import adape_flash_attn_func
+# from utils.triton_utils import flash_attn_func as flash_attn_func2
 from flash_attn import flash_attn_func
-
+import random 
 # from ...activations import ACT2FN
 # from ...modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast, SequenceClassifierOutputWithPast
 # from ...modeling_utils import PreTrainedModel
@@ -134,20 +134,29 @@ class AdaRotaryEmbedding(torch.nn.Module):
 
     def forward(self, x, seq_len=None):
         # 根据 inv_freq 计算 cos 和 sin
-        t = torch.arange(seq_len, device=self.inv_freq.device, dtype=self.inv_freq.dtype)
+        if seq_len > self.max_seq_len_cached:
+            self.max_seq_len_cached = seq_len
+            t = torch.arange(self.max_seq_len_cached, device=self.inv_freq.device, dtype=self.inv_freq.dtype)
+            # multiplier = seq_len // self.max_seq_len_cached if seq_len % self.max_seq_len_cached == 0 else seq_len // self.max_seq_len_cached + 1
+            # cos, sin = extend_seq_length(cos_emb, sin_emb, multiplier)
+            # cos_emb, sin_emb = torch.nn.Parameter(cos), torch.nn.Parameter(sin),
+            # self.max_seq_len_cached = multiplier * seq_len
+        #     self._set_cos_sin_cache(seq_len=seq_len, device=x.device, dtype=x.dtype)
+        else:
+            k = 0
+            if self.training:
+                k = random.randint(0, 2 * self.max_seq_len_cached)
+            if seq_len == 1: # this is for kv cache
+                k = self.max_seq_len_cached
+                self.max_seq_len_cached = k + 1
+            t = torch.arange(k, seq_len + k, device=self.inv_freq.device, dtype=self.inv_freq.dtype)
         t = t / self.scaling_factor
         freqs = torch.einsum("i,j->ij", t, self.inv_freq)
         emb = torch.cat((freqs, freqs), dim=-1)
         cos_emb = emb.cos()[None, None, :, :].repeat(1, self.num_heads, 1, 1)
         sin_emb = emb.sin()[None, None, :, :].repeat(1, self.num_heads, 1, 1)
 
-        # x: [bs, num_attention_heads, seq_len, head_size]
-        if seq_len > self.max_seq_len_cached:
-            multiplier = seq_len // self.max_seq_len_cached if seq_len % self.max_seq_len_cached == 0 else seq_len // self.max_seq_len_cached + 1
-            cos, sin = extend_seq_length(cos_emb, sin_emb, multiplier)
-            cos_emb, sin_emb = torch.nn.Parameter(cos), torch.nn.Parameter(sin),
-            self.max_seq_len_cached = multiplier * seq_len
-        #     self._set_cos_sin_cache(seq_len=seq_len, device=x.device, dtype=x.dtype)
+        # x: [bs, seq_len, head_size]
         batch_size = x.size(0)
 
         cos_cached_expanded = cos_emb[:, :, :seq_len, ...].expand(batch_size, -1, -1, -1)
@@ -195,7 +204,7 @@ class MyLlamaRotaryEmbedding(torch.nn.Module):
             self.sin_cached.copy_(sin_emb.repeat(1, self.num_heads, 1, 1))
 
 
-    def forward(self, x, seq_len=None):
+    def forward(self, x, seq_len=None, position_ids=None):
         # x: [bs, num_attention_heads, seq_len, head_size]
         if seq_len > self.max_seq_len_cached:
             multiplier = seq_len // self.max_seq_len_cached if seq_len % self.max_seq_len_cached == 0 else seq_len // self.max_seq_len_cached + 1
@@ -294,8 +303,18 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
     # sin = sin.squeeze(0).transpose(0, 1)
     sel_cos = cos.clone()
     sel_sin = sin.clone()
-    sel_cos = sel_cos[:,:,position_ids.squeeze(0),:]  # [bs, num_heads, seq_len, dim] original: [bs, 1, seq_len, dim]
-    sel_sin = sel_sin[:,:,position_ids.squeeze(0),:]  # q: [bs, num_heads, seq_len, dim]; cos: [bs, num_heads, seq_len, dim]
+    if position_ids.shape[0] == 1:
+        if position_ids.shape[1] == 1: # this is for kv cache
+            pass
+        # print(position_ids.shape, position_ids)
+        else:
+            sel_cos = sel_cos[:,:,position_ids.squeeze(0),:]  # [bs, num_heads, seq_len, dim] original: [bs, 1, seq_len, dim]
+            sel_sin = sel_sin[:,:,position_ids.squeeze(0),:]
+    else:
+        for bs_index, row in enumerate(position_ids):
+            sel_sin[bs_index] = sel_sin[bs_index,:,row,:]
+            sel_cos[bs_index] = sel_cos[bs_index,:,row,:]
+
     q_embed = (q * sel_cos) + (rotate_half(q) * sel_sin)
     k_embed = (k * sel_cos) + (rotate_half(k) * sel_sin) if k is not None else None
     return q_embed, k_embed
@@ -420,12 +439,11 @@ class PELlamaAttention(nn.Module):
         kv_seq_len = key_states.shape[-2]
         if past_key_value is not None:
             kv_seq_len += past_key_value[0].shape[-2]
-
-        
         # (batch_size, num_heads:8, seq_length:1024, head_dim:96)
         # query_states, key_states = apply_rotary_pos_emb(query_states, key_states, position_states[0], position_states[1], position_ids)
-            
-        assert past_key_value is None
+        assert self.num_key_value_groups == 1, "current apply_rotary_pos_emb method assume the q, k has same shape with positon states, please change the order of apply_rotary_pos_emb and repeat_kv"
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, position_states[0], position_states[1], position_ids)
+
         if past_key_value is not None:
             # reuse k, v, self_attention
             key_states = torch.cat([past_key_value[0], key_states], dim=2)
@@ -437,9 +455,7 @@ class PELlamaAttention(nn.Module):
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, position_states[0], position_states[1], position_ids)
-
-
+        # print(query_states.shape, key_states.shape)
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
         if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
@@ -530,7 +546,6 @@ class PELlamaFlashAttention2(PELlamaAttention):
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, position_states[0], position_states[1], position_ids)
 
 
-        assert past_key_value is None
         if past_key_value is not None:
             # reuse k, v, self_attention
             key_states = torch.cat([past_key_value[0], key_states], dim=2)
@@ -636,9 +651,12 @@ class PELlamaFlashAttention2(PELlamaAttention):
         else:
             if self.config.use_flash_attention_2 == "flash":
                 attn_output = flash_attn_func(query_states, key_states, value_states, dropout, softmax_scale=softmax_scale, causal=True)
+                # print(position_state0.shape)
+                # print(value_states.shape)
                 pos_output0 = flash_attn_func(query_states, key_states, position_state0, dropout, softmax_scale=softmax_scale, causal=True)
                 pos_output1 = flash_attn_func(query_states, key_states, position_state1, dropout, softmax_scale=softmax_scale, causal=True)
             elif self.config.use_flash_attention_2 == "triton":
+                from utils.triton_utils import adape_flash_attn_func
                 # position_state0 = value_states.clone()
                 # position_state1 = value_states.clone()
                 # v0 = position_state0.clone()
@@ -647,12 +665,15 @@ class PELlamaFlashAttention2(PELlamaAttention):
                     query_states, key_states, value_states, position_state0, position_state1, True, softmax_scale, 
                 )
             else:
+                # position_state0 = value_states.clone()
+                # position_state1 = value_states.clone()
+                # v0 = position_state0.clone()
+                # v1 = position_state1.clone()
+                from utils.triton_utils import flash_attn_func as flash_attn_func2
                 assert self.config.use_flash_attention_2 == "3triton"
                 attn_output = flash_attn_func2(query_states, key_states, value_states, True, softmax_scale)
                 pos_output0 = flash_attn_func2(query_states, key_states, position_state0, True, softmax_scale)
                 pos_output1 = flash_attn_func2(query_states, key_states, position_state1, True, softmax_scale)
-
-
 
         return attn_output, pos_output0, pos_output1
 
@@ -806,8 +827,11 @@ class LlamaDecoderLayer(nn.Module):
         pos_residual = position_states
 
         hidden_states = self.post_attention_layernorm(hidden_states)
+        #! this order is important
+        # position_states = self.pe(hidden_states, position_states)
         hidden_states = self.mlp(hidden_states)
         position_states = self.pe(hidden_states, position_states)
+
         # position_states = (self.bn1(position_states[0]), self.bn2(position_states[1]))
         hidden_states = residual + hidden_states
         position_states = add_tuples(position_states, pos_residual)
@@ -1012,121 +1036,6 @@ class LlamaModel(LlamaPreTrainedModel):
 
         return combined_attention_mask
 
-    @add_start_docstrings_to_model_forward(LLAMA_INPUTS_DOCSTRING)
-    def new_forward(
-        self,
-        input_ids: torch.LongTensor = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-        cache_position: Optional[torch.LongTensor] = None,
-    ) -> Union[Tuple, BaseModelOutputWithPast]:
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-        )
-        use_cache = use_cache if use_cache is not None else self.config.use_cache
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        if (input_ids is None) ^ (inputs_embeds is not None):
-            raise ValueError(
-                "You cannot specify both input_ids and inputs_embeds at the same time, and must specify either one"
-            )
-
-        if self.gradient_checkpointing and self.training and use_cache:
-            logger.warning_once(
-                "`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`."
-            )
-            use_cache = False
-
-        if inputs_embeds is None:
-            inputs_embeds = self.embed_tokens(input_ids)
-
-        past_seen_tokens = 0
-        if use_cache:  # kept for BC (cache positions)
-            if not isinstance(past_key_values, StaticCache):
-                past_key_values = DynamicCache.from_legacy_cache(past_key_values)
-                past_seen_tokens = past_key_values.get_seq_length()
-
-        if cache_position is None:
-            if isinstance(past_key_values, StaticCache):
-                raise ValueError("cache_position is a required argument when using StaticCache.")
-            cache_position = torch.arange(
-                past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
-            )
-
-        if position_ids is None:
-            position_ids = cache_position.unsqueeze(0)
-
-        causal_mask = self._update_causal_mask(attention_mask, inputs_embeds, cache_position)
-
-        # embed positions
-        hidden_states = inputs_embeds
-
-        # decoder layers
-        all_hidden_states = () if output_hidden_states else None
-        all_self_attns = () if output_attentions else None
-        next_decoder_cache = None
-
-        for decoder_layer in self.layers:
-            if output_hidden_states:
-                all_hidden_states += (hidden_states,)
-
-            if self.gradient_checkpointing and self.training:
-                layer_outputs = self._gradient_checkpointing_func(
-                    decoder_layer.__call__,
-                    hidden_states,
-                    causal_mask,
-                    position_ids,
-                    past_key_values,
-                    output_attentions,
-                    use_cache,
-                    cache_position,
-                )
-            else:
-                layer_outputs = decoder_layer(
-                    hidden_states,
-                    attention_mask=causal_mask,
-                    position_ids=position_ids,
-                    past_key_value=past_key_values,
-                    output_attentions=output_attentions,
-                    use_cache=use_cache,
-                    cache_position=cache_position,
-                )
-
-            hidden_states = layer_outputs[0]
-
-            if use_cache:
-                next_decoder_cache = layer_outputs[2 if output_attentions else 1]
-
-            if output_attentions:
-                all_self_attns += (layer_outputs[1],)
-
-        hidden_states = self.norm(hidden_states)
-
-        # add hidden states from the last decoder layer
-        if output_hidden_states:
-            all_hidden_states += (hidden_states,)
-
-        next_cache = None
-        if use_cache:
-            next_cache = (
-                next_decoder_cache.to_legacy_cache() if isinstance(next_decoder_cache, Cache) else next_decoder_cache
-            )
-        if not return_dict:
-            return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
-        return BaseModelOutputWithPast(
-            last_hidden_state=hidden_states,
-            past_key_values=next_cache,
-            hidden_states=all_hidden_states,
-            attentions=all_self_attns,
-        )
-
     # TODO: As of torch==2.2.0, the `attention_mask` passed to the model in `generate` is 2D and of dynamic length even when the static
     # KV cache is used. This is an issue for torch.compile which then recaptures cudagraphs at each decode steps due to the dynamic shapes.
     # (`recording cudagraph tree for symint key 13`, etc.), which is VERY slow. A workaround is `@torch.compiler.disable`, but this prevents using
@@ -1222,7 +1131,7 @@ class LlamaModel(LlamaPreTrainedModel):
         else:
             raise ValueError("You have to specify either decoder_input_ids or decoder_inputs_embeds")
 
-        assert past_key_values is None
+        past_key_values = None
         seq_length_with_past = seq_length
         past_key_values_length = 0
 
@@ -1253,7 +1162,7 @@ class LlamaModel(LlamaPreTrainedModel):
 
         hidden_states = inputs_embeds
         # cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
-        position_states = self.rotary_emb(hidden_states, seq_len=seq_length)
+        position_states = self.rotary_emb(hidden_states, seq_len=seq_length + past_key_values_length)
 
         if self.gradient_checkpointing and self.training:
             if use_cache:
@@ -1326,7 +1235,7 @@ class LlamaModel(LlamaPreTrainedModel):
             attentions=all_self_attns,
         )
 
-
+from transformers.models.llama.modeling_llama import LlamaForCausalLM
 class MyLlamaForCausalLM(LlamaPreTrainedModel):
     _tied_weights_keys = ["lm_head.weight"]
 
@@ -1418,7 +1327,6 @@ class MyLlamaForCausalLM(LlamaPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
-
         hidden_states = outputs[0]
         if self.config.pretraining_tp > 1:
             lm_head_slices = self.lm_head.weight.split(self.vocab_size // self.config.pretraining_tp, dim=0)

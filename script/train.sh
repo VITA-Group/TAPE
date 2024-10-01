@@ -20,7 +20,7 @@ fi
 # [ -z "${DATA_DIR}" ] && DATA_DIR=  # path to load data
 # [ -z "${CONFIG_NAME}" ] && CONFIG_NAME=config/${TYPE}.json # choose from [config/bipe_rope.json, config/bipe_alibi.json, config/rope.json, config/alibi.json]
 
-max_steps=$((50000 / NNODES))
+max_steps=$((10000 / NNODES))
 $command --nproc_per_node $NGPUS --nnodes $NNODES \
         --rdzv_endpoint $head_node_ip:29512 \
         --rdzv_id $RANDOM \
@@ -30,7 +30,7 @@ $command --nproc_per_node $NGPUS --nnodes $NNODES \
         --deepspeed "config/ds_configs/stage2.json" \
         --ddp_timeout 18000 \
         --dataset_cache_dir ../data/c4 \
-        --output_dir "output/${TYPE}_c4" \
+        --output_dir "output/${TYPE}_small_c4" \
         --config_name "config/${TYPE}.json" \
         --resume_from_checkpoint true \
         --max_steps $max_steps \

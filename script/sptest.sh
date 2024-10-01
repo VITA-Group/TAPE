@@ -19,7 +19,7 @@ fi
 # [ -z "${DATA_DIR}" ] && DATA_DIR=  # path to load data
 # [ -z "${CONFIG_NAME}" ] && CONFIG_NAME=config/${TYPE}.json # choose from [config/bipe_rope.json, config/bipe_alibi.json, config/rope.json, config/alibi.json]
 
-for use_flash_attention_2 in flash triton 3triton; do
+for use_flash_attention_2 in none flash triton 3triton; do
   for TYPE in adape; do
     $command --nproc_per_node $NGPUS --nnodes $NNODES \
             --rdzv_endpoint $head_node_ip:29512 \

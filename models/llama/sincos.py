@@ -47,7 +47,6 @@ logger = logging.get_logger(__name__)
 
 _CONFIG_FOR_DOC = "LlamaConfig"
 
-
 def create_sinusoidal_embeddings(x):
     bsz, seq_len, dim = x.shape
     pos = torch.arange(seq_len, dtype=x.dtype, device=x.device).unsqueeze(1)

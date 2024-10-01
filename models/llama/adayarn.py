@@ -40,11 +40,14 @@ from transformers.activations import ACT2FN
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast, SequenceClassifierOutputWithPast
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings
-from transformers.models.llama.configuration_llama import LlamaConfig
-import transformers
+# from transformers.models.llama.configuration_llama import LlamaConfig
+# import transformers
+import random
 # if transformers.__version__ != '4.34.0':
 #     from transformers.cache_utils import Cache, DynamicCache, StaticCache
 #     from transformers.modeling_attn_mask_utils import AttentionMaskConverter
+from config_llama import MyLlamaConfig as LlamaConfig
+from transformers import AutoModel
 
 logger = logging.get_logger(__name__)
 
@@ -134,6 +137,8 @@ class AdaYaRNEmbedding(torch.nn.Module):
         self.max_position_embeddings = max_position_embeddings
         self.base = base
         self.original_max_position_embeddings = original_max_position_embeddings
+        # print(original_max_position_embeddings)
+        # print(max_position_embeddings)
         self.extrapolation_factor = extrapolation_factor
         self.attn_factor = attn_factor
         self.beta_fast = beta_fast
@@ -144,7 +149,7 @@ class AdaYaRNEmbedding(torch.nn.Module):
         self.inv_freq = torch.nn.Parameter(inv_freq)
         self.yarn(self.max_position_embeddings / self.original_max_position_embeddings, device)
 
-        self.max_seq_len_cached = max_position_embeddings
+        self.max_seq_len_cached = original_max_position_embeddings
         # t = torch.arange(self.max_seq_len_cached, device=self.inv_freq.device, dtype=self.inv_freq.dtype)
         # freqs = torch.einsum("i,j->ij", t, self.inv_freq)
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
@@ -157,17 +162,23 @@ class AdaYaRNEmbedding(torch.nn.Module):
 
     def forward(self, x, seq_len=None):
         k = 0
-        # if self.training:
-            # k = random.randint(0, 99)
+        if self.training:
+            k = random.randint(0, 2 * self.max_seq_len_cached)
 
         if seq_len > self.max_seq_len_cached:
             self.max_seq_len_cached = seq_len
             # inner update self.inv_freq
+            # inv_freq = self.inv_freq
             inv_freq = self.yarn(seq_len / self.original_max_position_embeddings, x.device)
         else:
             inv_freq = self.inv_freq
-
-        t = torch.arange(seq_len + k, device=inv_freq.device, dtype=inv_freq.dtype)
+        # old_inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float().to(x.device) / self.dim))
+        # print(inv_freq)
+        # print("*** The difference ***")
+        # print(old_inv_freq - inv_freq)
+        # print("*** Max difference ***")
+        # print((old_inv_freq - inv_freq).max())
+        t = torch.arange(k, seq_len + k, device=inv_freq.device, dtype=inv_freq.dtype)
         freqs = torch.einsum("i,j->ij", t, inv_freq)
         emb = torch.cat((freqs, freqs), dim=-1)
         # emb.shape: [seq_len, 1]
@@ -175,21 +186,35 @@ class AdaYaRNEmbedding(torch.nn.Module):
         sin_emb = (emb.sin() * self.mscale)[None, None, :, :].repeat(1, self.num_heads, 1, 1)
 
         batch_size = x.size(0)
-        cos_expanded = cos_emb[:, :, k :seq_len + k, ...].expand(batch_size, -1, -1, -1)
-        sin_expanded = sin_emb[:, :, k :seq_len + k, ...].expand(batch_size, -1, -1, -1)
+        cos_expanded = cos_emb[:, :, :seq_len, ...].expand(batch_size, -1, -1, -1)
+        sin_expanded = sin_emb[:, :, :seq_len, ...].expand(batch_size, -1, -1, -1)
 
         return (
             cos_expanded.to(dtype=x.dtype),
             sin_expanded.to(dtype=x.dtype),
         )
 
+    def find_adayarn_rmap_mask(self):
+        r = ( self.original_max_position_embeddings * self.inv_freq ) / ( math.pi * 2 )
+        def linear_ramp_mask(min, max, var):
+            if min == max:
+                max += 0.001  # Prevent singularity
+            linear_func = (var - min) / (max - min)
+            ramp_func = torch.clamp(linear_func, 0, 1)
+            return ramp_func
+        mask_coef = linear_ramp_mask(self.beta_slow, self.beta_fast, r)
+        return mask_coef
+
+
     def yarn(self, scale, device):
         # pos_freqs = 1.0 / 
         inv_freq_extrapolation = self.inv_freq
         inv_freq_interpolation = inv_freq_extrapolation / scale
 
-        low, high = find_correction_range(self.beta_fast, self.beta_slow, self.dim, self.base, self.original_max_position_embeddings)
-        inv_freq_mask = (1 - linear_ramp_mask(low, high, self.dim // 2).to(device)) * self.extrapolation_factor # Get n-d rotational scaling corrected for extrapolation
+        # low, high = find_correction_range(self.beta_fast, self.beta_slow, self.dim, self.base, self.original_max_position_embeddings)
+        # inv_freq_mask = (1 - linear_ramp_mask(low, high, self.dim // 2).to(device)) * self.extrapolation_factor # Get n-d rotational scaling corrected for extrapolation
+        inv_freq_mask = self.find_adayarn_rmap_mask() * self.extrapolation_factor
+        # print(inv_freq_mask)
         inv_freq = inv_freq_interpolation * (1 - inv_freq_mask) + inv_freq_extrapolation * inv_freq_mask
 
         self.mscale = float(get_mscale(scale) * self.attn_factor) # Get n-d magnitude scaling corrected for interpolation
@@ -1055,7 +1080,7 @@ class LlamaModel(LlamaPreTrainedModel):
         #! here becomes the model-level init
         factor = config.rope_scaling['factor'] if config.rope_scaling else 1
         rope_theta = config.rope_theta if hasattr(config, "rope_theta") else 10000
-        self.rotary_emb = AdaYaRNEmbedding(config.hidden_size // config.num_attention_heads, config.num_attention_heads, original_max_position_embeddings=config.rope_scaling["original_max_position_embeddings"], max_position_embeddings=config.max_position_embeddings, base=rope_theta)
+        self.rotary_emb = AdaYaRNEmbedding(config.hidden_size // config.num_attention_heads, config.num_attention_heads, original_max_position_embeddings=config.original_max_position_embeddings, max_position_embeddings=config.max_position_embeddings, base=rope_theta)
         # self.rotary_emb = AdaRotaryEmbedding(config.hidden_size // config.num_attention_heads, config.num_attention_heads, max_position_embeddings=config.max_position_embeddings, base=rope_theta, scaling_factor=factor)
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
@@ -1587,3 +1612,5 @@ class MyLlamaForCausalLM(LlamaPreTrainedModel):
                 tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past),
             )
         return reordered_past
+
+# AutoModel.register(LlamaConfig, MyLlamaForCausalLM)

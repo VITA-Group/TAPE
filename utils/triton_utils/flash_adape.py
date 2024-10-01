@@ -1756,8 +1756,8 @@ class AdaFlashAttnFunc(torch.autograd.Function):
         #     causal=ctx.causal,
         #     softmax_scale=ctx.softmax_scale,
         # )
-        dq += dq0 + dq1
-        dk += dk0 + dk1
+        # dq += dq0 + dq1
+        # dk += dk0 + dk1
             # breakpoint()
         return dq, dk, dv, dv0, dv1, None, None, None
 

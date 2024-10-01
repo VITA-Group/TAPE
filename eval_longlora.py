@@ -218,7 +218,7 @@ def run_eval(args: EvalArguments):
         config.rope_theta = 1_000_000
 
     if "adape" in args.base_model:
-        from models.llama.adarope import MyLlamaForCausalLM
+        from models.llama.adape import MyLlamaForCausalLM
         # use_flash_attn = True if "flash" in args.base_model else False
         # config._attn_implementation = 'flash_attention_2' if use_flash_attn else 'eager'
         model = MyLlamaForCausalLM.from_pretrained(args.base_model,

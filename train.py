@@ -79,7 +79,16 @@ def train():
         config = MyLlamaConfig.from_pretrained(model_args.model_name_or_path)
     else:
         raise NotImplementedError
+    print(model_args.config_name)
+    print(config.rpe_type)
     assert type == config.rpe_type, f"not matched positional embeddding for config name {type} and config content {config.rpe_type}"
+
+    #! this auto_map is used in lm_eval harness later
+    config.auto_map = {
+        'AutoConfig': 'config.MyLlamaConfig',
+        'AutoModel': 'model.MyLlamaForCausalLM',
+        "AutoModelForCausalLM": 'model.MyLlamaForCausalLM'
+        }
 
     scaled_max_position_embeddings=int(training_args.model_max_position_embeddings * training_args.rope_scaling_factor)
     config.max_position_embeddings=scaled_max_position_embeddings
@@ -91,20 +100,21 @@ def train():
             "factor": training_args.rope_scaling_factor
             }
         # if 'yarn' in training_args.rope_scaling_type:
-        config.rope_scaling["original_max_position_embeddings"] = training_args.model_max_position_embeddings
+        config.original_max_position_embeddings = training_args.model_max_position_embeddings
     elif config.rpe_type in ['yarn', 'adayarn']:
         config.rope_scaling = {
             "type": config.rpe_type,
             "factor": training_args.rope_scaling_factor
             }
-        config.rope_scaling["original_max_position_embeddings"] = training_args.model_max_position_embeddings
+        config.original_max_position_embeddings = training_args.model_max_position_embeddings
         
     try:
         module_name = config.rpe_type
         MyLlamaForCausalLM = __import__(f"models.llama.{module_name}", fromlist=["MyLlamaForCausalLM"]).MyLlamaForCausalLM
-    except:
+    except Exception as e:
+        print(e)
         rpe_types = [
-            "rope", "sincos", "randrope", "alibi", "adarope", "yarn", 
+            "rope", "sincos", "randrope", "alibi", "adape", "yarn", 
             "t5rb", "fire", "xpos", "nope", "adayarn", "adalibi",
         ]
         raise NotImplementedError(f"Unknown positional embedding {module_name}, choose from {rpe_types}")
@@ -221,6 +231,10 @@ def train():
                 data_files['test'] = data_files['test'][:1]
     
         # remove train/test set to accelerate data loading if training/validation only
+        if 'debug' in training_args.output_dir:
+            data_files['validation'] = data_files['validation'][:10]
+            data_files["test"] = data_files["test"][:10]
+
         if not training_args.do_train:
             data_files['train'] = []
     
@@ -419,6 +433,14 @@ def train():
         metrics = trainer.evaluate(eval_dataset=test_dataset)
         trainer.log_metrics("predict", metrics)
         trainer.save_metrics("predict", metrics)
+
+    # also we need to create soft link for corresponding files under output_dir for lm_eval harness
+    model_link = os.path.join(training_args.output_dir, "model.py")
+    config_link = os.path.join(training_args.output_dir, "config.py")
+    if not os.path.exists(model_link):
+        os.symlink(f"/scratch/gpfs/pw4811/AdaPE/models/llama/{config.rpe_type}.py", model_link)
+    if not os.path.exists(config_link):
+        os.symlink("/scratch/gpfs/pw4811/AdaPE/config_llama.py", config_link)
 
 
 

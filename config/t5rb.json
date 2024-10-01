@@ -9,7 +9,7 @@
     "initializer_range": 0.02,
     "intermediate_size": 3072,
     "max_position_embeddings": 1024,
-    "relative_attention_num_buckets": 32,
+    "relative_attention_num_buckets": 64,
     "relative_attention_max_distance": 128,
     "model_type": "llama",
     "num_attention_heads": 12,
