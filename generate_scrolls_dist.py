@@ -85,12 +85,12 @@ def eval_data_dir(
     MyLlamaForCausalLM = __import__(f"models.llama.{module_name}", fromlist=["MyLlamaForCausalLM"]).MyLlamaForCausalLM
     model = MyLlamaForCausalLM.from_pretrained(model_path, config=config, ignore_mismatched_sizes=True, torch_dtype=torch_dtype).to(device)
 
-    dataset = load_dataset(f"tau/scrolls", args.dataset_name)['test'].select_columns(['id', 'input'])
+    dataset = load_dataset(f"tau/scrolls", args.dataset_name)['validation'].select_columns(['id', 'input'])
     dataset = dataset.map(lambda e: {'id': e['id'], 'input': e['input']})
     print("total examples: ", len(dataset))
     # I set shuffle=True for a more accurate progress bar.
     # If all the longest samples are first, the prog bar estimate is too high at the beginning.
-    print(dataset)
+    # print(dataset)
     sampler = DistributedSampler(dataset, shuffle=False)
     # sampler = ds.make_sortish_sampler(bs, distributed=True, add_extra_examples=False, shuffle=True)
     data_loader = DataLoader(dataset, sampler=sampler, )
@@ -132,7 +132,7 @@ def run_generate():
         default="500",
     )
 
-    parser.add_argument("--save_dir", type=str, help="where to save", default="tmp_gen")
+    parser.add_argument("--save_dir", type=str, help="where to save", default=None)
     parser.add_argument("--max_source_length", type=int, default=None)
     parser.add_argument("--bs", type=int, default=8, required=False, help="batch size")
     parser.add_argument(
@@ -152,6 +152,8 @@ def run_generate():
     # args, rest = parser.parse_known_args()
     args = parser.parse_args()
 
+    if args.save_dir is None:
+        args.save_dir = f"assets/results_scrolls/{args.dataset_name}"
     json_save_dir = Path(args.save_dir + "_tmp")
     Path(json_save_dir).mkdir(exist_ok=True)  # this handles locking.
     intermediate_files = list(json_save_dir.glob("rank_*.json"))
@@ -173,8 +175,8 @@ def run_generate():
         save_dir.mkdir(exist_ok=True)
         partial_results = gather_results_from_each_node(num_replicas, json_save_dir, args.sync_timeout)
         final_results = combine_partial_results(partial_results)
-        print(f"Saving aggregated results at {save_path}, intermediate in {json_save_dir}/")
         save_path = save_dir.joinpath(f"{args.model_name.split('/')[-1]}.json")
+        print(f"Saving aggregated results at {save_path}, intermediate in {json_save_dir}/")
         save_json(final_results, save_path)
 
         shutil.rmtree(json_save_dir)

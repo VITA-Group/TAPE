@@ -2,8 +2,8 @@ import os
 import argparse
 import json
 import shutil
-
-from datasets import load_dataset, load_metric
+import evaluate
+from datasets import load_dataset
 from huggingface_hub import hf_hub_download
 
 DATASETS = [
@@ -31,7 +31,7 @@ def main(args, raise_on_errors=False):
 
     if not verify_only:
         # Loading metrics
-        scrolls_metric = load_metric(download_metric(), dataset_name)
+        scrolls_metric = evaluate.load(download_metric(), dataset_name)
 
     # Downloading and loading the dataset from the hub
     load_dataset_kwargs = {
