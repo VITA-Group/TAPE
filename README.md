@@ -41,7 +41,24 @@ bash script/train.sh
 ```
 You can change CONFIG_NAME to choose different positional encoding variants. (`choose from [config/adape.json, config/alibi.json, config/rope.json`)
 
-## Finetuning
+### SCROLLS
+first finetune:
+```shell
+name=adape  # assume the output_dir is output/${name}_c4, if not, need to set 'TYPE=adape name=$output_name' simutaneously
+bash script/run_scrolls.sh
+```
+second generate:
+```shell
+torchrun --nproc_per_node=auto generate_scrolls_dist.py --model_name output/scrolls/DATASET_NAME/adape --dataset_name DATASET_NAME --save_dir PREDICTIONS_JSON
+```
+DATASET_NAME in ['narrative_qa', 'quality', "qasper", 'contract_nli']
+
+third evaluate:
+```shell
+ python eval_scrolls.py --split validation --dataset_name DATASET_NAME --predictions PREDICTIONS_JSON  --metrics_output_dir METRICS_OUTPUT_DIR
+```
+
+## Llama Finetuning
 Similiar to pretrainng, you can use the following command: 
 ```shell
 TYPE=adape
