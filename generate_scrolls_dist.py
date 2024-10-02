@@ -77,7 +77,12 @@ def eval_data_dir(
 
     # MODEL TOKENIZER
     tokenizer = AutoTokenizer.from_pretrained(model_path)
-    config.use_cache = True
+    if 'adape' in model_path:
+        print("use_cache disabled for adape")
+        config.use_cache = False
+    else:
+        print(f"use_cache enabled")
+        config.use_cache = True
     torch_dtype = torch.float16
     config.use_flash_attention_2 = 'flash'
 

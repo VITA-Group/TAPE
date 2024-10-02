@@ -44,19 +44,26 @@ You can change CONFIG_NAME to choose different positional encoding variants. (`c
 ### SCROLLS
 first finetune:
 ```shell
-name=adape  # assume the output_dir is output/${name}_c4, if not, need to set 'TYPE=adape name=$output_name' simutaneously
+TYPE=adape  # assume the output_dir is output/${TYPE}_c4, if not, need to set 'TYPE=adape output_name=<your_output_name> simutaneously
 bash script/run_scrolls.sh
 ```
 second generate:
 ```shell
-torchrun --nproc_per_node=auto generate_scrolls_dist.py --model_name output/scrolls/DATASET_NAME/adape --dataset_name DATASET_NAME --save_dir PREDICTIONS_JSON
+TYPE=adape
+dataset_name=quality
+bash script/gen_scrolls.sh
 ```
-DATASET_NAME in ['narrative_qa', 'quality', "qasper", 'contract_nli']
+or
+```shell
+torchrun --nproc_per_node=auto generate_scrolls_dist.py --model_name output/scrolls/$DATASET_NAME/adape --dataset_name $dataset_name --save_dir $PREDICTIONS_JSON
+```
+dataset_name in ['narrative_qa', 'quality', "qasper", 'contract_nli']
 
 third evaluate:
 ```shell
- python eval_scrolls.py --split validation --dataset_name DATASET_NAME --predictions PREDICTIONS_JSON  --metrics_output_dir METRICS_OUTPUT_DIR
+ python eval_scrolls.py --split validation --dataset_name $DATASET_NAME --predictions $PREDICTIONS_JSON  --metrics_output_dir $METRICS_OUTPUT_DIR
 ```
+PS: you can also use temp.sh to automatically detect the json files under assets/results_scrolls and output metrics under assets/results_scrolls/metrics
 
 ## Llama Finetuning
 Similiar to pretrainng, you can use the following command: 

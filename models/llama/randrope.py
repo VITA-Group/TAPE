@@ -145,15 +145,16 @@ class RandomRotaryEmbedding(LlamaRotaryEmbedding):
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
         # Build here to make `torch.jit.trace` work.
-        self.max_seq_len = 2 * max_position_embeddings
-        # self._set_cos_sin_cache(
-        #     seq_len=max_position_embeddings, device=self.inv_freq.device, dtype=torch.get_default_dtype()
-        # )    
+        # self.k = 2 * max_position_embeddings
+        # self.max_seq_len_cached = 2 * max_position_embeddings
+        self._set_cos_sin_cache(
+            seq_len=2 * max_position_embeddings, device=self.inv_freq.device, dtype=torch.get_default_dtype()
+        )    
 
     def _set_cos_sin(self, seq_len, device, dtype):
         # self.max_seq_len_cached = seq_len
         # t = torch.arange(self.max_seq_len_cached, device=device, dtype=self.inv_freq.dtype)
-        t = torch.sort(torch.randperm(self.max_seq_len, device=device)[:seq_len]).values.type_as(self.inv_freq)
+        t = torch.sort(torch.randperm(self.max_seq_len_cached, device=device)[:seq_len]).values.type_as(self.inv_freq)
 
         freqs = torch.einsum("i,j->ij", t, self.inv_freq)
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
@@ -162,8 +163,11 @@ class RandomRotaryEmbedding(LlamaRotaryEmbedding):
 
     def forward(self, x, seq_len=None):
         # x: [bs, num_attention_heads, seq_len, head_size]
-        # if seq_len > self.max_seq_len_cached:
-        cos, sin = self._set_cos_sin(seq_len=seq_len, device=x.device, dtype=x.dtype)
+        if seq_len <= self.max_seq_len_cached:
+            cos, sin = self._set_cos_sin(seq_len=seq_len, device=x.device, dtype=x.dtype)
+        else: # if seq_len > self.max_seq_len_cached:
+            self.max_seq_len_cached = seq_len
+            cos, sin = self._set_cos_sin(seq_len=seq_len, device=x.device, dtype=x.dtype)
 
         return (
             cos[:, :, :seq_len, ...].to(dtype=x.dtype),
