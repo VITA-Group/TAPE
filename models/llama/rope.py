@@ -28,9 +28,8 @@ from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa
 from utils import flash_attn_func as flash_attn_func2
-from flash_attn import flash_attn_func
-
-from flash_attn import flash_attn_varlen_func
+from flash_attn import flash_attn_func, flash_attn_varlen_func
+# from flash_attn import flash_attn_varlen_func
 
 # from ...activations import ACT2FN
 # from ...modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast, SequenceClassifierOutputWithPast
@@ -388,7 +387,7 @@ class LlamaAttention(nn.Module):
 
         return attn_output, attn_weights, past_key_value
 
-from transformers.models.llama.modeling_llama import LlamaModel
+# from transformers.models.llama.modeling_llama import LlamaModel
 class LlamaFlashAttention2(LlamaAttention):
     """
     Llama flash attention module. This module inherits from `LlamaAttention` as the weights of the module stays

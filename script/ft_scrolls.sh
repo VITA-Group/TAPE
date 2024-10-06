@@ -4,7 +4,7 @@ num_gpus=$(nvidia-smi --query-gpu=count --format=csv,noheader,nounits | head -n 
 echo "num_gpus=$num_gpus"
 output_name=${output_name:-$TYPE}
 echo output_name="$output_name"
-dataset_name=${dataset_name:-summ_screen_fd}
+dataset_name=${dataset_name:-quality}
 echo "dataset_name=${dataset_name}"
 # summary include "gov_report" "summ_screen_fd" "qmsum"
 # others include 'narrative_qa', 'quality', "qasper", 'contract_nli'
@@ -12,7 +12,8 @@ CUDA_ALLOC_CONF=expandable_segments:True
 # TORCH_DISTRIBUTED_DEBUG=DETAIL
 batch_size=2
 head_node_ip=$(hostname --ip-address)
-srun torchrun --nproc_per_node 4 --nnodes 1 \
+# nproc_per_node should be 4 in formal training
+srun torchrun --nproc_per_node auto --nnodes 1 \
     --rdzv_endpoint $head_node_ip:29512 \
     --rdzv_id $RANDOM \
     --rdzv_backend c10d \

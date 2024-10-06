@@ -1,4 +1,3 @@
-# Written by Yukang Chen
 # Some code based on https://github.com/epfml/landmark-attention
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,16 +16,11 @@ import os
 import math
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Dict, Optional, Sequence
-from transformers.models.llama.modeling_llama import LlamaForCausalLM
+from typing import Dict, Optional
 import torch
 import transformers
-from torch.utils.data import Dataset
 from transformers import Trainer, DataCollatorForLanguageModeling
 from peft import LoraConfig, get_peft_model
-from torch.distributed import barrier
-from models.adape import AdaPEConfig, get_adape_model
-from transformers.models.llama.modeling_llama import LlamaModel
 from datasets import load_dataset
 
 IGNORE_INDEX = -100
@@ -36,13 +30,10 @@ DEFAULT_BOS_TOKEN = "<s>"
 DEFAULT_UNK_TOKEN = "<unk>"
 
 import sys
-# 获取当前文件所在的目录以及上级目录
 current_directory = os.path.dirname(os.path.abspath(__file__))
 parent_directory = os.path.dirname(current_directory)
-# 将目录添加到 sys.path
 sys.path.append(current_directory)
 sys.path.append(parent_directory)
-# print("sys.path:", sys.path)
 
 
 @dataclass
@@ -213,25 +204,11 @@ def train():
         model=model,
     )
 
-    rank = int(os.environ.get('RANK', -1))
-    # if rank > 0:
-    #     barrier(device_ids=[rank])
-    # data_cache_file = f'./data/RedPajama-Data-1T-Sample/{training_args.model_max_length}/train.arrow'
-
     data_cache_dir = f'../data/tokenized_redpajama/{training_args.model_max_length}'
     os.makedirs(data_cache_dir, exist_ok=True)
     dataset = load_dataset("togethercomputer/RedPajama-Data-1T-Sample", cache_dir=training_args.cache_dir)
     dataset = dataset.map(partial(tokenize_fn, tokenizer), batched=True, num_proc=48, remove_columns=["text", "meta"], cache_file_names={'train': f"{data_cache_dir}/train.arrow"}, load_from_cache_file=True)
 
-    # data_cache_dir = f'../data/tokenized_redpajama/{training_args.model_max_length}'
-    # os.makedirs(data_cache_dir, exist_ok=True)
-    # dataset = load_dataset("togethercomputer/RedPajama-Data-1T-Sample", cache_dir=training_args.cache_dir)
-    # dataset = dataset.map(partial(tokenize_fn, tokenizer), batched=True, num_proc=48, remove_columns=["text", "meta"], cache_file_names={'train': f"{data_cache_dir}/train.arrow"}, load_from_cache_file=True)
-
-    # if rank == 0:
-    #     barrier(device_ids=[0])
-
-    # print(dataset)
 
     data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 

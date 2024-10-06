@@ -1,42 +1,23 @@
 import argparse
-import json
 import logging
-import math
 import os
 
-import glob
-import random
-from itertools import chain
 from pathlib import Path
-import gc
 
 import datasets
-import torch
-from accelerate import Accelerator, DistributedType
 from accelerate.logging import get_logger
 from accelerate.utils import set_seed
-from datasets import load_dataset, load_from_disk
-from huggingface_hub import Repository, create_repo
-from torch.utils.data import DataLoader
-from tqdm.auto import tqdm
+from datasets import load_dataset
 
 import transformers
 from transformers import (
-    CONFIG_MAPPING,
-    MODEL_MAPPING,
-    AutoConfig,
-    AutoModelForCausalLM,
     AutoTokenizer,
     SchedulerType,
     default_data_collator,
-    get_scheduler,
 )
 # from model_llama import MyLlamaForCausalLM
 from config_llama import MyLlamaConfig
 from transformers.utils import check_min_version, send_example_telemetry
-from transformers.utils.versions import require_version
-# from process import preprocess as my_preprocess
-from accelerate import DistributedDataParallelKwargs as DDPK
 
 
 logger = get_logger(__name__)

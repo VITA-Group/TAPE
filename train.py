@@ -1,5 +1,5 @@
+#    Modification Copyright 2024 Jiajun Zhu
 #    Modification Copyright 2024 Zhenyu He
-#    Modification Copyright 2023 Dawei Zhu
 #    Copyright 2023 Rohan Taori, Ishaan Gulrajani, Tianyi Zhang, Yann Dubois, Xuechen Li
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,23 +14,18 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
-import copy
 import logging
-import random
 import os
 from itertools import chain
 from dataclasses import dataclass, field
-from typing import Optional, Union, Dict, Sequence
+from typing import Optional
 
 import torch
 import torch.distributed
 import transformers
-# import deepspeed
 from config_llama import MyLlamaConfig
-# from torch.utils.data import Dataset
-from transformers import Trainer, AutoConfig, default_data_collator, AutoTokenizer
-from datasets import load_dataset, load_from_disk, IterableDataset
-
+from transformers import Trainer, default_data_collator, AutoTokenizer
+from datasets import load_dataset, IterableDataset
 
 transformers.logging.set_verbosity_info()
 
@@ -72,24 +67,17 @@ def train():
     parser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
-    type = model_args.config_name.split('/')[-1].split('.')[0]
     if model_args.config_name:
         config = MyLlamaConfig.from_pretrained(model_args.config_name)
     elif model_args.model_name_or_path:
         config = MyLlamaConfig.from_pretrained(model_args.model_name_or_path)
     else:
         raise NotImplementedError
-    print(model_args.config_name)
-    print(config.rpe_type)
-    assert type == config.rpe_type, f"not matched positional embeddding for config name {type} and config content {config.rpe_type}"
 
-    #! this auto_map is used in lm_eval harness later
-    config.auto_map = {
-        'AutoConfig': 'config.MyLlamaConfig',
-        'AutoModel': 'model.MyLlamaForCausalLM',
-        "AutoModelForCausalLM": 'model.MyLlamaForCausalLM'
-        }
+    type = model_args.config_name.split('/')[-1].split('.')[0]
+    assert type == config.rpe_type, f"Not matched positional embeddding method for config file {type}.json and config content {config.rpe_type}. There's a chance you ran a method not meeting your expectations."
 
+    # complete configuration
     scaled_max_position_embeddings=int(training_args.model_max_position_embeddings * training_args.rope_scaling_factor)
     config.max_position_embeddings=scaled_max_position_embeddings
     config.use_flash_attention_2 = training_args.use_flash_attention_2
@@ -249,10 +237,8 @@ def train():
     
         return raw_datasets
     
-    # raw_datasets = load_dataset("allenai/c4", "en", streaming=True)
-    raw_datasets = load_json_dataset("/scratch/gpfs/DATASETS/hugging_face/c4/en")
-    # raw_datasets = load_dataset("/scratch/gpfs/DATASETS/hugging_face/c4/en", split={"train": "train[:10%]", "validation": "validation"}, chunksize=10<<23)
-    # raw_datasets = load_dataset("/scratch/gpfs/DATASETS/hugging_face/c4/en", split={"train": "train[:10%]", "validation": "validation"}, streaming=True)
+    raw_datasets = load_dataset("allenai/c4", "en", streaming=True)
+    # raw_datasets = load_json_dataset("/scratch/gpfs/DATASETS/hugging_face/c4/en")
 
     def infer_columns_of_dataset(raw_datasets):
         default_cols = raw_datasets.features
@@ -271,25 +257,8 @@ def train():
     else:
         column_names = infer_columns_of_dataset(raw_datasets["test"])
 
-    # column_names = raw_datasets["train"].column_names
-    # text_column_name = "text" if "text" in column_names else column_names[0]
-
-    # def tokenize_function(examples):
-    #     # print("max_length", tokenizer.model_max_length)
-    #     # tokenizer.add_special_tokens({'pad_token': '[PAD]'})
-    #     return tokenizer(examples["text"])
-
-    tok_logger = transformers.utils.logging.get_logger("transformers.tokenization_utils_base")
-    # from transformers.testing_utils import CaptureLogger 
     def tokenize_function(examples):
-        # with CaptureLogger(tok_logger) as cl:
         output = tokenizer(examples["text"])
-        # clm input could be much much longer than block_size
-        # if "Token indices sequence length is longer than the" in cl.out:
-            # tok_logger.warning(
-            #     "^^^^^^^^^^^^^^^^ Please ignore the warning above - this long input will be chunked into smaller bits"
-            #     " before being passed to the model."
-            # )
         return output
 
     if training_args.local_rank > 0: 
@@ -299,22 +268,13 @@ def train():
     tokenized_datasets = raw_datasets.map(
         tokenize_function,
         batched=True,
-        # num_proc=48,
         remove_columns=column_names,
-        # load_from_cache_file=False,
-        # keep_in_memory=True,
-        # cache_file_names={
-        #     "train": f"{data_args.dataset_cache_dir}/tokenized/tokenized_datasets_train.arrow", 
-        #     "validation": f"{data_args.dataset_cache_dir}/tokenized/tokenized_datasets_validation.arrow"
-        #     },
-            # desc="Running tokenizer on dataset"
     )
 
     # Main data processing function that will concatenate all texts from our dataset and generate chunks of block_size.
     def group_texts(examples):
         block_size = config.train_scale
         # Concatenate all texts.
-        # print(examples.keys())
         concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
         total_length = len(concatenated_examples[list(examples.keys())[0]])
 
@@ -331,34 +291,12 @@ def train():
         result["labels"] = result["input_ids"].copy()
 
         return result
-    # def group_texts(examples):
-    #     # Concatenate all texts.
-    #     concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
-    #     total_length = len(concatenated_examples[list(examples.keys())[0]])
-    #     # We drop the small remainder, and if the total_length < block_size  we exclude this batch and return an empty dict.
-    #     # We could add padding if the model supported it instead of this drop, you can customize this part to your needs.
-    #     total_length = (total_length // config.train_scale) * config.train_scale
-    #     # Split by chunks of max_len.
-    #     result = {
-    #         k: [t[i : i + config.train_scale] for i in range(0, total_length, config.train_scale)]
-    #         for k, t in concatenated_examples.items()
-    #     }
-    #     result["labels"] = result["input_ids"].copy()
-    #     return result
 
     os.makedirs(f"{data_args.dataset_cache_dir}/{config.train_scale}", exist_ok=True)
     lm_datasets = tokenized_datasets.map(
         group_texts,
         batched=True,
-        # batch_size = 100,
-        # num_proc=48,
-        # load_from_cache_file=False,
-        # keep_in_memory=True,
-        # cache_file_names={"train": f"{data_args.dataset_cache_dir}/{config.train_scale}/lm_datasets_train.arrow",\
-        #     "validation": f"{data_args.dataset_cache_dir}/{config.train_scale}/lm_datasets_validation.arrow",}, \
-        # desc=f"Grouping texts in chunks of {config.train_scale}",
     )
-
 
     if training_args.local_rank == 0:
         print(f"rank{training_args.local_rank} loading datasets")
@@ -370,20 +308,14 @@ def train():
     valid_dataset = lm_datasets["validation"]
     test_dataset = lm_datasets["test"]
 
-
     if training_args.local_rank == 0:
         torch.distributed.barrier()
-    
-    # if training_args.local_rank == 0:
-    #     print("len(train_dataset):", len(train_dataset))
-    #     for index in random.sample(range(len(train_dataset)), 3):
-    #         print(f"Sample {index} of the training set: {train_dataset[index]}.")
     
     data_collator = default_data_collator # DataCollatorForSupervisedDataset(tokenizer=tokenizer)
 
     data_module = dict(train_dataset=train_dataset, eval_dataset=valid_dataset, data_collator=data_collator)
 
-    #Tell Trainer not to attempt DataParallel
+    # Tell Trainer not to attempt DataParallel
     model.is_parallelizable = True
     model.model_parallel = True
 
@@ -414,7 +346,6 @@ def train():
     trainer = Trainer(model=model, tokenizer=tokenizer, args=training_args, **data_module)
     model.config.use_cache = False
 
-    # torch.autograd.set_detect_anomaly(True)
     if training_args.do_train:
         logging.info("*** Start Training ***")
         trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)
@@ -433,16 +364,6 @@ def train():
         metrics = trainer.evaluate(eval_dataset=test_dataset)
         trainer.log_metrics("predict", metrics)
         trainer.save_metrics("predict", metrics)
-
-    # also we need to create soft link for corresponding files under output_dir for lm_eval harness
-    model_link = os.path.join(training_args.output_dir, "model.py")
-    config_link = os.path.join(training_args.output_dir, "config.py")
-    if not os.path.exists(model_link):
-        os.symlink(f"/scratch/gpfs/pw4811/AdaPE/models/llama/{config.rpe_type}.py", model_link)
-    if not os.path.exists(config_link):
-        os.symlink("/scratch/gpfs/pw4811/AdaPE/config_llama.py", config_link)
-
-
 
 
 if __name__ == "__main__":

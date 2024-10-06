@@ -972,8 +972,6 @@ class MyLlamaForCausalLM(LlamaPreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
-        import time
-        start_time = time.perf_counter()
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -985,11 +983,6 @@ class MyLlamaForCausalLM(LlamaPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
-
-        end_time = time.perf_counter()
-        execution_time = end_time - start_time
-        print(f"forwad执行时间：{execution_time} 秒")
-
         hidden_states = outputs[0]
         if self.config.pretraining_tp > 1:
             lm_head_slices = self.lm_head.weight.split(self.vocab_size // self.config.pretraining_tp, dim=0)

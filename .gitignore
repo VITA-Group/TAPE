@@ -1,4 +1,6 @@
 # Byte-compiled / optimized / DLL files
+legacy/
+log/
 output/
 wandb/
 debugpy*

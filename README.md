@@ -1,86 +1,62 @@
-<h1 align="center">
-Adaptive Equivariant Positional Encoding for Better Length Extrapolation (WIP)
-</h1>
+<h1 align="center">Rethinking Addressing in Language Models via Contextualized Equivariant Positional Encoding (TAPE)</h1>
+<p align="center">
+    <a href=""><img src="https://img.shields.io/badge/-arXiv-grey?logo=gitbook&logoColor=white" alt="Paper"></a>
+    <a href=""><img src="https://img.shields.io/badge/-Github-grey?logo=github" alt="Github"></a>
+    <a href=""> <img alt="License" src="https://img.shields.io/static/v1?label=UR&message=ICLR%2725&color=blue"> </a>
+</p>
 
-## Setup Environment
+
+This repository contains the official implementation of TAPE as described in the paper: [Rethinking Addressing in Language Models via Contextualized Equivariant Positional Encoding]() by Jiajun Zhu, Peihao Wang, Ruisi Cai, Jason D. Lee, Pan Li, Zhangyang Wang.
+
+
+## Getting Started
 ```shell
 conda create -n adape python=3.10
 conda activate adape
 pip install -r requirements.txt
 pip install flash-attn --no-build-isolation
 ```
-## Data
-We use c4.en for pretraining and RedPajama-Data-1T-Sample for finetuning.
 
-*Pretraining Data*
-```shell
-GIT_LFS_SKIP_SMUDGE=1 git clone https://huggingface.co/datasets/allenai/c4
-cd c4
-git lfs pull --include "en/*"
-```
-or (not tested)
-```python
-from datasets import load_dataset
-en = load_dataset("allenai/c4", "en")
-```
-*Finetuning Data*
+## Arithmetic Learning
+It is implemented independently under the directory `arithmetic/`, another [github repo]() linked as submodule. It should has independent environment as well. Please refer to its [README](./arithmetic/README.md) for detailed instructions about training and evaluation.
 
-This [line of code](https://github.com/zhuconv/AdaPE/blob/main/train_longlora.py#L214) will directly load RedPajama-Data-1T-Sample data from hugginface hub or local cache dir.
-
-
-
-## Pretraining
-For pretraining, please download c4.en dataset
-
-The scripts under script/ covers the commands for training and perpleixity evaluation.  For example, you can start training 151M BiPE-RoPE model with the following command:
+## Training From Scratch
+### Pretraining
+The scripts under script/ covers the commands for training. For example, you can start training TAPE (`adape` in code) model with the following command:
 
 ```shell
-OUTPUT_DIR=./output/adape  # path to save checkpoints and tensorboard
+OUTPUT_DIR=output/adape
 CONFIG_NAME=config/adarope.json
 bash script/train.sh
 ```
-You can change CONFIG_NAME to choose different positional encoding variants. (`choose from [config/adape.json, config/alibi.json, config/rope.json`)
+You can change CONFIG_NAME to choose different positional encoding variants. (`choose from those under config/`)
 
-### SCROLLS
-first finetune:
+### Finetuning on SCROLLS and Evaluation
+There are three steps to get evaluation results:
+1. finetune pre-trained models on SCROLLS
+2. generate answers in validation set
+3. evaluate the answers with corresponding metric
+
 ```shell
-TYPE=adape  # assume the output_dir is output/${TYPE}_c4, if not, need to set 'TYPE=adape output_name=<your_output_name> simutaneously
-bash script/run_scrolls.sh
-```
-second generate:
-```shell
-TYPE=adape
-dataset_name=quality
+export TYPE=adape DATASET_NAME=quality
+export METRIC_DIR=scrolls/metrics
+export SAVE_DIR=scrolls/quality
+bash script/ft_scrolls.sh # assume the pretrained checkpoint is under output/${TYPE}_c4, if not, need to set 'output_name=<your_output_name>'
 bash script/gen_scrolls.sh
+python eval_scrolls.py --split validation --dataset_name $DATASET_NAME --predictions ${SAVE_DIR}/${TYPE}.json  --metrics_output_dir $METRIC_DIR
 ```
-or
-```shell
-torchrun --nproc_per_node=auto generate_scrolls_dist.py --model_name output/scrolls/$DATASET_NAME/adape --dataset_name $dataset_name --save_dir $PREDICTIONS_JSON
-```
-dataset_name in ['narrative_qa', 'quality', "qasper", 'contract_nli']
 
-third evaluate:
-```shell
- python eval_scrolls.py --split validation --dataset_name $DATASET_NAME --predictions $PREDICTIONS_JSON  --metrics_output_dir $METRICS_OUTPUT_DIR
-```
-PS: you can also use temp.sh to automatically detect the json files under assets/results_scrolls and output metrics under assets/results_scrolls/metrics
+You can change DATASET_NAME to choose different dataset. (`choose from ['narrative_qa', 'quality', "qasper", 'contract_nli']`)
 
-## Llama Finetuning
-Similiar to pretrainng, you can use the following command: 
+## PEFT Llama2-7B
+### Finetuning
+Similiar to training from scratch, you can use the following command ans select different methods: 
 ```shell
 TYPE=adape
-bash script/long_train.sh
-```
-You can change TYPE to choose different positional encoding variants. (`choose from [adape, alibi, rope]`)
-
-## Evaluation
-For pretraining perplexity evaluation, you need to prepare `monology/pile-test-val` using `download_data.py`. Then you can use the following command:
-```shell
-DATA_DIR=../data/pile  # path to load data
-MODEL=./output/adape # model checkpoint path
-bash script/eval.sh
+bash script/train_llama.sh
 ```
 
+### Evaluation
 For finetuning perplexity evaluation, you need to manually download data hosted by [LongLoRA](https://github.com/dvlab-research/LongLoRA/tree/main)
 
 | Dataset    | Split      | Link                                                                                                         |
@@ -90,10 +66,16 @@ For finetuning perplexity evaluation, you need to manually download data hosted 
  
  Then you can use the following command:
 ```shell
-data=proof_pile  # path to load data
-model_name=./output/llama_adape # model checkpoint path
-bash script/long_eval.sh
+data=proof_pile
+model_path=output/llama_adape
+bash script/eval_llama.sh
 ```
+
+We also have `eval_retrieval.py` for evaluation on passkey retrieval task.
+```shell
+python3 eval_retrieval.py --context_size 8192 --base_model output/llama_adape --max_tokens 8192 --interval 1000
+```
+
 
 ## Credits
 The codebase are inherited from [BiPE](https://github.com/zhenyuhe00/BiPE) and [LongLoRA](https://github.com/dvlab-research/LongLoRA/tree/main). Thanks to their excellent work!

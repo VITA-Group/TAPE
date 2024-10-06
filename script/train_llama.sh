@@ -26,7 +26,7 @@ srun torchrun --nproc_per_node $NGPUS --nnodes $NNODES \
         --rdzv_endpoint $head_node_ip:29500 \
         --rdzv_id $RANDOM \
         --rdzv_backend c10d \
-        train_longlora.py  \
+        train_llama.py  \
         --ddp_timeout 18000 \
         --model_name_or_path meta-llama/Llama-2-7b-hf \
         --resume_from_checkpoint false \

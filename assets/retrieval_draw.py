@@ -37,7 +37,7 @@ plt.figure(figsize=(10, 4))
 plt.plot(x_labels, longlora_values, label="LongLoRA", marker='s', linestyle='-.')
 plt.plot(x_labels, lora_values, label="LoRA", marker='o', linestyle='-.')
 plt.plot(x_labels, theta_values, label="Theta Scaling", marker='v', linestyle='-.')
-plt.plot(x_labels, adape_values, label="AdeRoPE", marker='^', linestyle='-.')
+plt.plot(x_labels, adape_values, label="TAPE", marker='^', linestyle='-.')
 
 # Adding titles and labels
 plt.title("Passkey Retrieval Accuracy", pad=20)
