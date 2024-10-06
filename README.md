@@ -25,8 +25,7 @@ It is implemented independently under the directory `arithmetic/`, another githu
 The scripts under script/ covers the commands for training. For example, you can start training TAPE (`adape` in code) model with the following command:
 
 ```shell
-OUTPUT_DIR=output/adape
-CONFIG_NAME=config/adarope.json
+export TYPE=adape
 bash script/train.sh
 ```
 You can change CONFIG_NAME to choose different positional encoding variants. (`choose from those under config/`)
@@ -52,7 +51,7 @@ You can change DATASET_NAME to choose different dataset. (`choose from ['narrati
 ### Finetuning
 Similiar to training from scratch, you can use the following command ans select different methods: 
 ```shell
-TYPE=adape
+export TYPE=adape
 bash script/train_llama.sh
 ```
 

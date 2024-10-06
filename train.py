@@ -306,7 +306,6 @@ def train():
 
     train_dataset = lm_datasets["train"]
     valid_dataset = lm_datasets["validation"]
-    test_dataset = lm_datasets["test"]
 
     if training_args.local_rank == 0:
         torch.distributed.barrier()
@@ -359,12 +358,6 @@ def train():
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
         
-    if training_args.do_predict:
-        logging.info("*** Evaluate on test set***")
-        metrics = trainer.evaluate(eval_dataset=test_dataset)
-        trainer.log_metrics("predict", metrics)
-        trainer.save_metrics("predict", metrics)
-
 
 if __name__ == "__main__":
     train()

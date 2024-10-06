@@ -1,6 +1,6 @@
 #!/bin/sh
-NGPUS=4
-NNODES=1
+NGPUS=${NGPUS:-4}
+NNODES=${NNODES:-1}
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 echo "Running experiment of method $TYPE"
 torchrun --nproc_per_node $NGPUS --nnodes $NNODES \

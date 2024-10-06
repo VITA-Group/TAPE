@@ -1,5 +1,6 @@
-NGPUS=4
-NNODES=1
+#!/bin/sh
+NGPUS=${NGPUS:-4}
+NNODES=${NNODES:-1}
 max_steps=$((10000 / NNODES))
 torchrun --nproc_per_node $NGPUS --nnodes $NNODES \
         train.py \
