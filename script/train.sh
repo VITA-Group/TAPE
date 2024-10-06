@@ -1,30 +1,7 @@
-#!/bin/sh
-
-nodes=$( scontrol show hostnames $SLURM_JOB_NODELIST )
-nodes_array=($nodes)
-head_node=${nodes_array[0]}
-head_node_ip=$(srun --nodes=1 --ntasks=1 -w "$head_node" hostname --ip-address)
-
-echo Node IP: $head_node_ip
-export LOGLEVEL=INFO
-
-if [[ "$SLURM_JOB_NAME" == "interactive" ]]; then
-  step=1
-  command="torchrun"
-else
-  step=1
-  command="srun torchrun"
-fi
-
-# [ -z "${OUTPUT_DIR}" ] && OUTPUT_DIR=./output/${TYPE}_pile  # path to save checkpoints and tensorboard
-# [ -z "${DATA_DIR}" ] && DATA_DIR=  # path to load data
-# [ -z "${CONFIG_NAME}" ] && CONFIG_NAME=config/${TYPE}.json # choose from [config/bipe_rope.json, config/bipe_alibi.json, config/rope.json, config/alibi.json]
-
+NGPUS=4
+NNODES=1
 max_steps=$((10000 / NNODES))
-$command --nproc_per_node $NGPUS --nnodes $NNODES \
-        --rdzv_endpoint $head_node_ip:29512 \
-        --rdzv_id $RANDOM \
-        --rdzv_backend c10d \
+torchrun --nproc_per_node $NGPUS --nnodes $NNODES \
         train.py \
         --use_flash_attention_2 flash \
         --deepspeed "config/ds_configs/stage2.json" \

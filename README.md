@@ -18,7 +18,7 @@ pip install flash-attn --no-build-isolation
 ```
 
 ## Arithmetic Learning
-It is implemented independently under the directory `arithmetic/`, another [github repo]() linked as submodule. It should has independent environment as well. Please refer to its [README](./arithmetic/README.md) for detailed instructions about training and evaluation.
+It is implemented independently under the directory `arithmetic/`, another github repo linked as submodule. It should has independent environment as well. Please refer to its [README](https://github.com/zhuconv/arithmetic/blob/main/README.md) for detailed instructions about training and evaluation.
 
 ## Training From Scratch
 ### Pretraining

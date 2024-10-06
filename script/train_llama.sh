@@ -1,31 +1,9 @@
 #!/bin/sh
-
-nodes=$( scontrol show hostnames $SLURM_JOB_NODELIST )
-nodes_array=($nodes)
-head_node=${nodes_array[0]}
-head_node_ip=$(srun --nodes=1 --ntasks=1 -w "$head_node" hostname --ip-address)
-
-echo Node IP: $head_node_ip
-export LOGLEVEL=INFO
-
-# if [ "$DEBUG" = "true" ]; then
-#   step=1
-#   command="python -m pdb -m torch.distributed.launch"
-# else
-step=1
-command=""
-# fi
-
-# module load anaconda3/2024.6
-# conda activate mantis
+NGPUS=4
+NNODES=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 echo "Running experiment of method $TYPE"
-echo "The path to Python is: $(which python)"
-# echo "Command is $command"
-srun torchrun --nproc_per_node $NGPUS --nnodes $NNODES \
-        --rdzv_endpoint $head_node_ip:29500 \
-        --rdzv_id $RANDOM \
-        --rdzv_backend c10d \
+torchrun --nproc_per_node $NGPUS --nnodes $NNODES \
         train_llama.py  \
         --ddp_timeout 18000 \
         --model_name_or_path meta-llama/Llama-2-7b-hf \
