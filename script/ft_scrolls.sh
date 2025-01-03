@@ -2,7 +2,7 @@
 TYPE=${TYPE:-adape}
 output_name=${output_name:-$TYPE}
 echo output_name="$output_name"
-dataset_name=${dataset_name:-quality}
+dataset_name=${DATASET_NAME:-quality}
 echo "dataset_name=${dataset_name}"
 # summary include "gov_report" "summ_screen_fd" "qmsum"
 # others include 'narrative_qa', 'quality', "qasper", 'contract_nli'
@@ -29,8 +29,9 @@ torchrun --nproc_per_node 4 --nnodes 1 \
     --weight_decay 0.01 \
     --max_steps 1000 \
     --warmup_ratio 0.1 \
-    --save_steps 50 \
-    --save_total_limit 2 \
+    --save_steps 100 \
+    --logging_steps 10 \
+    --save_total_limit 3 \
     --seed 2024 \
     --preprocessing_num_workers 32 \
     --resume_from_checkpoint True \

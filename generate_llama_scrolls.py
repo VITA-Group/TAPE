@@ -22,7 +22,7 @@ from typing import Dict, List
 import os
 from datasets import load_dataset
 from finetune_scrolls import SUMMARY_TASKS, OTHER_TASKS
-
+import math
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -52,25 +52,24 @@ def eval_data_dir(
     torch.distributed.init_process_group(backend="nccl", rank=local_rank)
     print("local_rank", local_rank)
 
-    save_dir = Path(save_dir) # '_tmp'
-    short_name = args.model_name.split('/')[-1]
-    save_path = save_dir.joinpath(f"rank_{local_rank}_{short_name}.json")
+    save_dir = Path(save_dir)
+    save_path = save_dir.joinpath(f"rank_{local_rank}_output.json")
     torch.cuda.set_device(local_rank)
     device = f'cuda:{local_rank}'
 
     def generate_text_for_sum(input_ids, device="cpu"):
-        beam_output=model.generate(torch.tensor(input_ids).long().unsqueeze(0).to(device),max_new_tokens=1000, num_return_sequences=1, do_sample=True, **gen_args)
+        beam_output=model.generate(torch.tensor(input_ids).long().unsqueeze(0).to(device),max_new_tokens=1000, num_return_sequences=1, top_k=1, do_sample=False, use_cache=config.use_cache)
         output=tokenizer.decode(beam_output[0][len(input_ids):], skip_special_tokens=True)
         return output
 
     def generate_text_for_qa(input_ids, device="cpu"):
-        beam_output=model.generate(torch.tensor(input_ids).long().unsqueeze(0).to(device),max_new_tokens=200,num_return_sequences=1, top_k=1)
+        beam_output=model.generate(torch.tensor(input_ids).long().unsqueeze(0).to(device),max_new_tokens=200,num_return_sequences=1, top_k=1, do_sample=True, use_cache=config.use_cache)
         output=tokenizer.decode(beam_output[0][len(input_ids):],skip_special_tokens=True)
         return output
 
-    gen_args = {"top_p": 1} if args.dataset_name == 'gov_report' else {"top_k": 3} 
     generate_text = generate_text_for_sum if args.dataset_name in SUMMARY_TASKS else generate_text_for_qa
     model_path = args.model_name
+    
 
     # from model_llama_local import MyLlamaForCausalLM
     from config_llama import MyLlamaConfig
@@ -78,24 +77,29 @@ def eval_data_dir(
 
     # MODEL TOKENIZER
     tokenizer = AutoTokenizer.from_pretrained(model_path)
-    torch_dtype = torch.float16
-    config.use_flash_attention_2 = 'flash'
-
     if 'adape' in model_path:
-        print("use_cache disabled for TAPE")
+        print("use_cache disabled for adape")
         config.use_cache = False
-    elif 'fire' in model_path:
-        print("use_cache disabled for FIRE")
-        config.use_cache = False
-        torch_dtype = torch.float32
     else:
         print(f"use_cache enabled")
         config.use_cache = True
 
+    torch_dtype = torch.float16
+    config.use_flash_attention_2 = 'flash'
 
     module_name = config.rpe_type
-    MyLlamaForCausalLM = __import__(f"models.llama.{module_name}", fromlist=["MyLlamaForCausalLM"]).MyLlamaForCausalLM
-    model = MyLlamaForCausalLM.from_pretrained(model_path, config=config, ignore_mismatched_sizes=True, torch_dtype=torch_dtype, device_map=device)
+    context_size = 8192
+    orig_ctx_len = getattr(config, "max_position_embeddings", None) # this value should be 4096 for LLaMA2 models
+    if orig_ctx_len and context_size > orig_ctx_len:
+        scaling_factor = float(math.ceil(context_size / orig_ctx_len))
+        config.rope_scaling = {"type": "linear", "factor": scaling_factor}
+    if module_name == "adape":
+        print("Use TAPE now!")
+        from models.llama.adape import MyLlamaForCausalLM
+    # MyLlamaForCausalLM = __import__(f"models.llama.{module_name}", fromlist=["MyLlamaForCausalLM"]).MyLlamaForCausalLM
+    else:
+        from transformers import AutoModelForCausalLM as MyLlamaForCausalLM
+    model = MyLlamaForCausalLM.from_pretrained(model_path, config=config, ignore_mismatched_sizes=True, torch_dtype=torch_dtype, device_map=device, trust_remote_code=True)
 
     dataset = load_dataset(f"tau/scrolls", args.dataset_name)['validation'].select_columns(['id', 'input'])
     dataset = dataset.map(lambda e: {'id': e['id'], 'input': e['input']})
@@ -107,32 +111,9 @@ def eval_data_dir(
     # sampler = ds.make_sortish_sampler(bs, distributed=True, add_extra_examples=False, shuffle=True)
     data_loader = DataLoader(dataset, sampler=sampler, )
     results = {}
-
-    # 如果文件存在，则加载已有结果
-    target_name = save_dir.name.replace(f"_{short_name}_tmp", "")
-    target_path = save_dir.parent / target_name / f"{short_name}.json"
-    if os.path.exists(target_path):
-        with open(target_path, "r") as f:
-            existing_results = json.load(f)
-        id_set = set(existing_results.keys())
-        print(f"Loaded {len(id_set)} existing IDs from {save_path}")
-    else:
-        existing_results = {}
-        id_set = set()
-        print("No existing results found. Starting fresh.")
-
-    # 初始化计时器
-    start_time = time.time()
     for example in tqdm(data_loader):
-        # 确保批量大小为1
+        # example = batch[0]
         assert len(example["id"]) == 1
-        example_id = example["id"][0]
-
-        # 如果ID已存在，跳过
-        if example_id in id_set:
-            continue
-
-        # 根据任务类型生成输入
         if args.dataset_name in SUMMARY_TASKS:
             report = tokenizer("Context:\n" + example['input'][0] + "\n Please summarize this report:")
             report['input_ids'] = report['input_ids'][:7184] + report['input_ids'][-7:]
@@ -140,25 +121,13 @@ def eval_data_dir(
             report = tokenizer(" ".join(example['input'][0].split(" ")[:15000]))
             report['input_ids'] = report['input_ids'][:7991]
 
-        # 生成文本
         generated = generate_text(report['input_ids'], device=model.device)
-
-        # 保存结果到临时字典
-        results[example_id] = generated
-        # id_set.add(example_id)
-
-        # 每天保存一次结果
-        # if time.time() - start_time >= 3300:
-        # print("Time is up. Exit with 0. Saving intermediate results...")
-        existing_results.update(results)
-        save_json(existing_results, save_path)
-        # return existing_results, sampler.num_replicas 
-    # 保存最终结果
-    # print("Saving final results...")
-    # existing_results.update(results)
-    # save_json(existing_results, save_path)
-    print(f"Processing complete. Results saved to {save_path}.")
-    return existing_results, sampler.num_replicas
+        results[example["id"][0]] = generated
+        # results.append({"prediction": generated, "id": example["id"]})
+        # for i, pred in enumerate(preds):
+        #     results.append({"pred": pred, "id": ids[i].item()})
+    save_json(results, save_path)
+    return results, sampler.num_replicas
 
 
 def run_generate():
@@ -166,7 +135,7 @@ def run_generate():
     parser.add_argument(
         "--model_name",
         type=str,
-        default="adape",
+        default="ape1_sent_rope",
     )
     parser.add_argument(
         "--dataset_name",
@@ -191,7 +160,7 @@ def run_generate():
     parser.add_argument(
         "--sync_timeout",
         type=int,
-        default=1800,
+        default=600,
         required=False,
         help="How long should master process wait for other processes to finish.",
     )
@@ -201,23 +170,13 @@ def run_generate():
 
     if args.save_dir is None:
         args.save_dir = f"assets/results_scrolls/{args.dataset_name}"
-    short_name = args.model_name.split('/')[-1]
-    json_save_dir = Path(args.save_dir + f"_{short_name}_tmp")
+    json_save_dir = Path(args.save_dir + "_tmp")
     Path(json_save_dir).mkdir(exist_ok=True)  # this handles locking.
     intermediate_files = list(json_save_dir.glob("rank_*.json"))
-
-    save_dir = Path(args.save_dir)
-    save_dir.mkdir(exist_ok=True)
     if intermediate_files:
-        partial_results = gather_results_from_each_node(2, json_save_dir, args.sync_timeout)
-        final_results = combine_partial_results(partial_results)
-        save_path = save_dir.joinpath(f"{short_name}.json")
-        print(f"Saving aggregated results at {save_path}, Removing the intermediate files in {json_save_dir}.")
-        save_json(final_results, save_path)
-        shutil.rmtree(json_save_dir)
-    # if intermediate_files:
-        # raise ValueError(f"Found files at {json_save_dir} please move or remove them.")
+        raise ValueError(f"Found files at {json_save_dir} please move or remove them.")
         # In theory, a node could finish and save before another node hits this. If this happens, we can address later.
+
 
     Path(args.save_dir).mkdir(exist_ok=True)
     local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -227,10 +186,12 @@ def run_generate():
         local_rank=local_rank,
     )
 
+    save_dir = Path(args.save_dir)
+    save_dir.mkdir(exist_ok=True)
     if local_rank <= 0:
         partial_results = gather_results_from_each_node(num_replicas, json_save_dir, args.sync_timeout)
         final_results = combine_partial_results(partial_results)
-        save_path = save_dir.joinpath(f"{short_name}.json")
+        save_path = save_dir.joinpath(f"{args.model_name.split('/')[-1]}.json")
         print(f"Saving aggregated results at {save_path}, intermediate in {json_save_dir}/")
         save_json(final_results, save_path)
         shutil.rmtree(json_save_dir)
@@ -253,7 +214,6 @@ def gather_results_from_each_node(num_replicas, save_dir, timeout) -> List[Dict[
     start_wait = time.time()
     logger.info("waiting for all nodes to finish")
     json_data = None
-    print('num_replicas', num_replicas)
     while (time.time() - start_wait) < timeout:
         json_files = list(save_dir.glob("rank_*.json"))
         if len(json_files) < num_replicas:

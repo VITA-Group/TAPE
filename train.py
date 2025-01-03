@@ -62,7 +62,82 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer, output_dir: st
         cpu_state_dict = {key: value.cpu() for key, value in state_dict.items()}
         del state_dict
         trainer._save(output_dir, state_dict=cpu_state_dict)  # noqa
-              
+
+def load_json_dataset(training_args, dataset_dir, sanity_check=False, streaming=True):
+    import os, glob, random, copy
+    dataset_subsample_rate = 0.1
+    test_split_percentage = 0.03
+    def uniform_sample_list(file_list, subsample_rate):
+        if not 0 < subsample_rate <= 1:
+            raise ValueError(f'subsample_rate wrong: {subsample_rate}')
+
+        sample_size = int(len(file_list) * subsample_rate)
+        return random.sample(file_list, sample_size)
+    def print_rank_0(*msg):
+        local_rank = int(os.getenv("LOCAL_RANK", "0"))
+        if local_rank != 0:
+            return
+        print(*msg)
+
+    if not os.path.exists(dataset_dir):
+        raise ValueError(f'The sepcified data path does not exist: {dataset_dir}')
+
+    data_files = {
+        'train': [],
+        'validation': [],
+        'test': []
+    }
+
+    # json_suffices = ['jsonl.zstd', 'jsonl.zst', "json"]
+    # for suffix in json_suffices:
+    suffix = "json"
+    data_files['train'] += glob.glob(f'*train*.{suffix}', root_dir=dataset_dir, recursive=True)
+    data_files['validation'] += glob.glob(f'*validation*.{suffix}', root_dir=dataset_dir, recursive=True)
+
+    data_files['train'] = sorted(data_files['train'])
+    data_files['train'] = [os.path.join(dataset_dir, filename) for filename in data_files['train']]
+    data_files['validation'] = sorted(data_files['validation'])
+    data_files['validation'] = [os.path.join(dataset_dir, filename) for filename in data_files['validation']]
+    # print(data_files['train'][0])
+    # print(data_files['validation'][0])
+
+    if dataset_subsample_rate is not None and dataset_subsample_rate < 1.0:
+        data_files['train'] = uniform_sample_list(data_files['train'], dataset_subsample_rate)
+
+
+    if test_split_percentage > 0.:
+        # total_valid_files = max(1, int(len(data_files['train']) * data_args.validation_split_percentage))
+        # stride = math.floor(len(data_files['train']) / total_valid_files)
+        # data_files['test'] = copy.deepcopy(data_files['train'][::stride])
+
+        data_files['test'] = copy.deepcopy(uniform_sample_list(data_files['train'], test_split_percentage))
+        data_files['train'] = [fn for fn in data_files['train'] if fn not in data_files['test']]
+
+    # only load one shard for a quick test
+    if sanity_check:
+        data_files['train'] = data_files['train'][:1]
+        if len(data_files['test']) > 1:
+            data_files['test'] = data_files['test'][:1]
+
+    # remove train/test set to accelerate data loading if training/validation only
+    if 'debug' in training_args.output_dir:
+        data_files['validation'] = [data_files['validation'][0]]
+        data_files["test"] = [data_files["test"][0]]
+
+    if not training_args.do_train:
+        data_files['train'] = []
+
+    if not training_args.do_eval:
+        data_files['validation'] = []
+    
+    if not training_args.do_predict:
+        data_files["test"] = []
+
+    print_rank_0(f"Loading json dataset from {dataset_dir}, {len(data_files.get('train', []))} train files, {len(data_files.get('test', []))} test files")
+    raw_datasets = load_dataset("json", data_files=data_files, streaming=streaming)
+
+    return raw_datasets
+
 def train():
     parser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
@@ -75,7 +150,8 @@ def train():
         raise NotImplementedError
 
     type = model_args.config_name.split('/')[-1].split('.')[0]
-    assert type == config.rpe_type, f"Not matched positional embeddding method for config file {type}.json and config content {config.rpe_type}. There's a chance you ran a method not meeting your expectations."
+    if type != config.rpe_type:
+        assert config.rpe_type == 'adape', f"Not matched positional embeddding method for config file {type}.json and config content {config.rpe_type}. There's a chance you ran a method not meeting your expectations."
 
     # complete configuration
     scaled_max_position_embeddings=int(training_args.model_max_position_embeddings * training_args.rope_scaling_factor)
@@ -106,30 +182,7 @@ def train():
             "t5rb", "fire", "xpos", "nope", "adayarn", "adalibi",
         ]
         raise NotImplementedError(f"Unknown positional embedding {module_name}, choose from {rpe_types}")
-    # if config.rpe_type == "rope":
-    #     from models.llama.rope import MyLlamaForCausalLM
-    # elif config.rpe_type == 'randrope':
-    #     from models.llama.randrope import MyLlamaForCausalLM
-    # elif config.rpe_type == "alibi":
-    #     from models.llama.alibi import MyLlamaForCausalLM
-    # elif config.rpe_type == "adape":
-    #     from models.llama.adarope import MyLlamaForCausalLM
-    # elif config.rpe_type == "yarn":
-    #     from models.llama.yarn import MyLlamaForCausalLM
-    # elif config.rpe_type == 't5rb':
-    #     from models.llama.t5rb import MyLlamaForCausalLM
-    # elif config.rpe_type == 'fire':
-    #     from models.llama.fire import MyLlamaForCausalLM
-    # elif config.rpe_type == 'xpos':
-    #     from models.llama.xpos import MyLlamaForCausalLM
-    # elif config.rpe_type == 'nope':
-    #     from models.llama.nope import MyLlamaForCausalLM
-    # elif config.rpe_type == 'adayarn':
-    #     from models.llama.adayarn import MyLlamaForCausalLM
-    # elif config.rpe_type == 'adalibi':
-    #     from models.llama.adalibi import MyLlamaForCausalLM
-    # else:
-    #     raise NotImplementedError
+
 
     if model_args.model_name_or_path:
         model = MyLlamaForCausalLM.from_pretrained(
@@ -162,83 +215,10 @@ def train():
         use_fast=True,
     )
 
-    def load_json_dataset(dataset_dir, sanity_check=False):
-        import os, glob, random, copy
-        dataset_subsample_rate = 0.1
-        test_split_percentage = 0.03
-        def uniform_sample_list(file_list, subsample_rate):
-            if not 0 < subsample_rate <= 1:
-                raise ValueError(f'subsample_rate wrong: {subsample_rate}')
+ 
     
-            sample_size = int(len(file_list) * subsample_rate)
-            return random.sample(file_list, sample_size)
-        def print_rank_0(*msg):
-            local_rank = int(os.getenv("LOCAL_RANK", "0"))
-            if local_rank != 0:
-                return
-            print(*msg)
-    
-        if not os.path.exists(dataset_dir):
-            raise ValueError(f'The sepcified data path does not exist: {dataset_dir}')
-    
-        data_files = {
-            'train': [],
-            'validation': [],
-            'test': []
-        }
-    
-        # json_suffices = ['jsonl.zstd', 'jsonl.zst', "json"]
-        # for suffix in json_suffices:
-        suffix = "json"
-        data_files['train'] += glob.glob(f'*train*.{suffix}', root_dir=dataset_dir, recursive=True)
-        data_files['validation'] += glob.glob(f'*validation*.{suffix}', root_dir=dataset_dir, recursive=True)
-    
-        data_files['train'] = sorted(data_files['train'])
-        data_files['train'] = [os.path.join(dataset_dir, filename) for filename in data_files['train']]
-        data_files['validation'] = sorted(data_files['validation'])
-        data_files['validation'] = [os.path.join(dataset_dir, filename) for filename in data_files['validation']]
-        # print(data_files['train'][0])
-        # print(data_files['validation'][0])
-    
-        if dataset_subsample_rate is not None and dataset_subsample_rate < 1.0:
-            data_files['train'] = uniform_sample_list(data_files['train'], dataset_subsample_rate)
-    
-    
-        if test_split_percentage > 0.:
-            # total_valid_files = max(1, int(len(data_files['train']) * data_args.validation_split_percentage))
-            # stride = math.floor(len(data_files['train']) / total_valid_files)
-            # data_files['test'] = copy.deepcopy(data_files['train'][::stride])
-    
-            data_files['test'] = copy.deepcopy(uniform_sample_list(data_files['train'], test_split_percentage))
-            data_files['train'] = [fn for fn in data_files['train'] if fn not in data_files['test']]
-    
-        # only load one shard for a quick test
-        if sanity_check:
-            data_files['train'] = data_files['train'][:1]
-            if len(data_files['test']) > 1:
-                data_files['test'] = data_files['test'][:1]
-    
-        # remove train/test set to accelerate data loading if training/validation only
-        if 'debug' in training_args.output_dir:
-            data_files['validation'] = data_files['validation'][:10]
-            data_files["test"] = data_files["test"][:10]
-
-        if not training_args.do_train:
-            data_files['train'] = []
-    
-        if not training_args.do_eval:
-            data_files['validation'] = []
-        
-        if not training_args.do_predict:
-            data_files["test"] = []
-    
-        print_rank_0(f"Loading json dataset from {dataset_dir}, {len(data_files.get('train', []))} train files, {len(data_files.get('test', []))} test files")
-        raw_datasets = load_dataset("json", data_files=data_files, streaming=True)
-    
-        return raw_datasets
-    
-    raw_datasets = load_dataset("allenai/c4", "en", streaming=True)
-    # raw_datasets = load_json_dataset("/scratch/gpfs/DATASETS/hugging_face/c4/en")
+    # raw_datasets = load_dataset("allenai/c4", "en", streaming=True)
+    raw_datasets = load_json_dataset(training_args, "/scratch/gpfs/DATASETS/hugging_face/c4/en")
 
     def infer_columns_of_dataset(raw_datasets):
         default_cols = raw_datasets.features

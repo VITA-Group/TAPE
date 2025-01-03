@@ -103,7 +103,7 @@ class LlamaRMSNorm(nn.Module):
 
 import torch
 class AdaRotaryEmbedding(torch.nn.Module):
-    def __init__(self, dim, num_heads, max_position_embeddings=2048, base=10000, device=None, scaling_factor=1.0):
+    def __init__(self, dim, num_heads, max_position_embeddings=2048, base=10000, device=None, scaling_factor=1.0, shift=None):
         super().__init__()
         self.scaling_factor = scaling_factor
         self.num_heads = num_heads
@@ -112,9 +112,9 @@ class AdaRotaryEmbedding(torch.nn.Module):
         self.base = base
         inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float().to(device) / self.dim))
         self.inv_freq = torch.nn.Parameter(inv_freq, requires_grad=False)
-        # self.inv_freq = inv_freq
+        # self.inv_freq = inv_freq.to("cuda:0")
         self.max_seq_len_cached = max_position_embeddings
-
+        self.shift = shift
 
     # def _set_cos_sin_cache(self, seq_len, device, dtype):
     #     self.max_seq_len_cached = seq_len
@@ -146,12 +146,15 @@ class AdaRotaryEmbedding(torch.nn.Module):
             k = 0
             if self.training:
                 k = random.randint(0, 2 * self.max_seq_len_cached)
+            if self.shift:
+                k = self.shift
             if seq_len == 1: # this is for kv cache
                 exit(-1)
                 k = self.max_seq_len_cached
                 self.max_seq_len_cached = k + 1
             t = torch.arange(k, seq_len + k, device=self.inv_freq.device, dtype=self.inv_freq.dtype)
         t = t / self.scaling_factor
+        # print(self.inv_freq[5])
         freqs = torch.einsum("i,j->ij", t, self.inv_freq)
         emb = torch.cat((freqs, freqs), dim=-1)
         cos_emb = emb.cos()[None, None, :, :].repeat(1, self.num_heads, 1, 1)
@@ -391,6 +394,12 @@ class PELlamaAttention(nn.Module):
         # query_states, key_states = apply_rotary_pos_emb(query_states, key_states, position_states[0], position_states[1], position_ids)
         assert self.num_key_value_groups == 1, "current apply_rotary_pos_emb method assume the q, k has same shape with positon states, please change the order of apply_rotary_pos_emb and repeat_kv"
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, position_states[0], position_states[1], position_ids)
+        def compute_inner_product(cos_vectors, sin_vectors):
+            cos_inner = cos_vectors @ cos_vectors.transpose(-2, -1)  # [7, 7]
+            # 计算 sin 部分的内积
+            sin_inner = sin_vectors @ sin_vectors.transpose(-2, -1)  # [7, 7]
+            return cos_inner + sin_inner
+        dot_product = compute_inner_product(position_states[0], position_states[1])
 
         if past_key_value is not None:
             # reuse k, v, self_attention
@@ -445,7 +454,7 @@ class PELlamaAttention(nn.Module):
         if not output_attentions:
             attn_weights = None
 
-        return attn_output, pos_output, attn_weights, past_key_value
+        return attn_output, pos_output, dot_product, past_key_value
 
 from transformers.models.llama.modeling_llama import _get_unpad_data
 from transformers.utils import is_flash_attn_available
@@ -933,7 +942,7 @@ class LlamaModel(LlamaPreTrainedModel):
         #! here becomes the model-level init
         factor = config.rope_scaling['factor'] if config.rope_scaling else 1
         rope_theta = config.rope_theta if hasattr(config, "rope_theta") else 10000
-        self.rotary_emb = AdaRotaryEmbedding(config.hidden_size // config.num_attention_heads, config.num_attention_heads, max_position_embeddings=config.max_position_embeddings, base=rope_theta, scaling_factor=factor)
+        self.rotary_emb = AdaRotaryEmbedding(config.hidden_size // config.num_attention_heads, config.num_attention_heads, max_position_embeddings=config.max_position_embeddings, base=rope_theta, scaling_factor=factor, shift=getattr(config, 'shift', None))
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
         self.layers = nn.ModuleList([LlamaDecoderLayer(config) for _ in range(config.num_hidden_layers)])
@@ -1110,7 +1119,9 @@ class LlamaModel(LlamaPreTrainedModel):
 
         hidden_states = inputs_embeds
         # cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+        
         position_states = self.rotary_emb(hidden_states, seq_len=seq_length + past_key_values_length)
+
 
         if self.gradient_checkpointing and self.training:
             if use_cache:

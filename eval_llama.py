@@ -213,7 +213,6 @@ def run_eval(args: EvalArguments):
         config.rope_scaling = {"type": "linear", "factor": scaling_factor}
 
     # Load model and tokenizer
-    # Load model and tokenizer
     if 'theta' in args.base_model:
         config.rope_theta = 1_000_000
 

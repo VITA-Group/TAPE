@@ -99,25 +99,29 @@ class LlamaRMSNorm(nn.Module):
 
 
 class LlamaRotaryEmbedding(torch.nn.Module):
-    def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None):
+    def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None, shift=None):
         super().__init__()
 
         self.dim = dim
         self.max_position_embeddings = max_position_embeddings
         self.base = base
         inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float().to(device) / self.dim))
+        # self.inv_freq = torch.nn.Parameter(inv_freq, requires_grad=False)
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
         # Build here to make `torch.jit.trace` work.
+        self.shift = shift if shift else 0
+        # assert self.shift == 0, "this is only used in rebuttal"
         self._set_cos_sin_cache(
             seq_len=max_position_embeddings, device=self.inv_freq.device, dtype=torch.get_default_dtype()
         )
 
     def _set_cos_sin_cache(self, seq_len, device, dtype):
         self.max_seq_len_cached = seq_len
-        t = torch.arange(self.max_seq_len_cached, device=device, dtype=self.inv_freq.dtype)
+        t = torch.arange(self.shift, self.shift + self.max_seq_len_cached, device=device, dtype=self.inv_freq.dtype)
 
         freqs = torch.einsum("i,j->ij", t, self.inv_freq)
+        # print(self.inv_freq[5])
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
         emb = torch.cat((freqs, freqs), dim=-1)
         self.register_buffer("cos_cached", emb.cos()[None, None, :, :].to(dtype), persistent=False)
@@ -173,6 +177,7 @@ class LlamaDynamicNTKScalingRotaryEmbedding(LlamaRotaryEmbedding):
         t = torch.arange(self.max_seq_len_cached, device=device, dtype=self.inv_freq.dtype)
 
         freqs = torch.einsum("i,j->ij", t, self.inv_freq)
+        # exit(0)
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
         emb = torch.cat((freqs, freqs), dim=-1)
         self.register_buffer("cos_cached", emb.cos()[None, None, :, :].to(dtype), persistent=False)
@@ -268,11 +273,12 @@ class LlamaAttention(nn.Module):
         self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
         
-        self._init_rope()
+        self._init_rope('cuda:0')
 
-    def _init_rope(self):
+    def _init_rope(self, device):
+        # print(device)
         if self.config.rope_scaling is None:
-            self.rotary_emb = LlamaRotaryEmbedding(self.head_dim, max_position_embeddings=self.max_position_embeddings)
+            self.rotary_emb = LlamaRotaryEmbedding(self.head_dim, device=device, max_position_embeddings=self.max_position_embeddings, shift=getattr(self.config, 'shift', None))
         else:
             scaling_type = self.config.rope_scaling["type"]
             scaling_factor = self.config.rope_scaling["factor"]
@@ -333,7 +339,18 @@ class LlamaAttention(nn.Module):
         if past_key_value is not None:
             kv_seq_len += past_key_value[0].shape[-2]
 
+        def compute_inner_product(cos_vectors, sin_vectors):
+            cos_vectors
+            # 计算 cos 部分的内积
+            cos_inner = cos_vectors @ cos_vectors.transpose(-2, -1)  # [7, 7]
+            # 计算 sin 部分的内积
+            sin_inner = sin_vectors @ sin_vectors.transpose(-2, -1)  # [7, 7]
+            # 两部分相加
+            return cos_inner + sin_inner
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+        # print(cos)
+        dot_product = compute_inner_product(cos, sin)
+        # print(dot_product)
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
             
         if past_key_value is not None:
@@ -385,7 +402,7 @@ class LlamaAttention(nn.Module):
         if not output_attentions:
             attn_weights = None
 
-        return attn_output, attn_weights, past_key_value
+        return attn_output, dot_product, past_key_value
 
 # from transformers.models.llama.modeling_llama import LlamaModel
 class LlamaFlashAttention2(LlamaAttention):
@@ -426,7 +443,6 @@ class LlamaFlashAttention2(LlamaAttention):
             kv_seq_len += past_key_value[0].shape[-2]
 
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
-
 
         if past_key_value is not None:
             # reuse k, v, self_attention

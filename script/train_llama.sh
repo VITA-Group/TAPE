@@ -1,6 +1,6 @@
 #!/bin/sh
 NGPUS=${NGPUS:-4}
-NNODES=${NNODES:-1}
+NNODES=${NNODES:-2}
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 echo "Running experiment of method $TYPE"
 torchrun --nproc_per_node $NGPUS --nnodes $NNODES \
@@ -11,7 +11,7 @@ torchrun --nproc_per_node $NGPUS --nnodes $NNODES \
         --peft_type $TYPE \
         --bf16 true \
         --output_dir ./output/llama_$TYPE \
-        --model_max_length 4096 \
+        --model_max_length 8192 \
         --use_flash_attn true \
         --per_device_train_batch_size 1     \
         --per_device_eval_batch_size 2     \

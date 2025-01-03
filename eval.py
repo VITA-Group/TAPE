@@ -139,9 +139,17 @@ def main():
     if args.seed is not None:
         set_seed(args.seed)
 
-    raw_datasets = load_dataset("arrow", data_files={'test': f"{args.dataset_cache_dir}/test/data*.arrow"}, streaming=True)
-    # raw_datasets = load_from_disk(args.dataset_cache_dir)
-    raw_datasets = raw_datasets["test"]
+    if 'c4' not in args.dataset_cache_dir:
+        raw_datasets = load_dataset("arrow", data_files={'test': f"{args.dataset_cache_dir}/test/data*.arrow"}, streaming=True)
+        # raw_datasets = load_from_disk(args.dataset_cache_dir)
+        raw_datasets = raw_datasets["test"]
+    else:
+        from train import load_json_dataset
+        args.output_dir = 'debug'
+        args.do_train, args.do_eval, args.do_predict = False, True, False
+        raw_datasets = load_json_dataset(args, "/scratch/gpfs/DATASETS/hugging_face/c4/en")
+        raw_datasets = raw_datasets["validation"]
+    print(raw_datasets)
 
 
     if args.config_name:
