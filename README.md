@@ -6,7 +6,7 @@
 </p>
 
 
-This repository contains the official implementation of TAPE as described in the paper: [Rethinking Addressing in Language Models via Contextualized Equivariant Positional Encoding](https://arxiv.org/abs/2501.00712) by Jiajun Zhu, Peihao Wang, Ruisi Cai, Jason D. Lee, Pan Li, Zhangyang Wang.
+This repository contains the official implementation of TAPE as described in the paper: [Rethinking Addressing in Language Models via Contextualized Equivariant Positional Encoding](https://arxiv.org/abs/2501.00712) (ICML 2025) by Jiajun Zhu, Peihao Wang, Ruisi Cai, Jason D. Lee, Pan Li, Zhangyang Wang.
 
 
 ## Getting Started
